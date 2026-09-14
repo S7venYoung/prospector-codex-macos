@@ -1,12 +1,34 @@
 import SwiftUI
+import AppKit
 
 @main
 struct ProspectorCodexMacOSApp: App {
+    @Environment(\.openWindow) private var openWindow
+
+    init() {
+        // Accessory apps stay out of the Dock while remaining available from the menu bar.
+        NSApplication.shared.setActivationPolicy(.accessory)
+    }
+
     var body: some Scene {
-        WindowGroup("Prospector Codex") {
+        MenuBarExtra("Prospector Codex", systemImage: "circle.hexagongrid.fill") {
+            Button("打开 Prospector Codex") {
+                openWindow(id: "dashboard")
+                NSApplication.shared.activate(ignoringOtherApps: true)
+            }
+            Divider()
+            Text("接收器：等待连接")
+                .foregroundStyle(.secondary)
+            Button("退出") {
+                NSApplication.shared.terminate(nil)
+            }
+        }
+
+        Window("Prospector Codex", id: "dashboard") {
             ContentView()
                 .frame(minWidth: 520, minHeight: 620)
         }
+        .defaultPosition(.center)
     }
 }
 
