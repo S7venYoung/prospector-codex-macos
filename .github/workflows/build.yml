@@ -1,0 +1,33 @@
+name: Build Prospector Codex macOS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Swift
+        run: swift --version
+
+      - name: Build
+        run: swift build -c release
+
+      - name: Package executable
+        run: |
+          mkdir -p artifact
+          cp .build/release/ProspectorCodexMacOS artifact/ProspectorCodexMacOS
+          ditto -c -k --sequesterRsrc --keepParent artifact ProspectorCodexMacOS-macos.zip
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProspectorCodexMacOS-macos
+          path: ProspectorCodexMacOS-macos.zip
