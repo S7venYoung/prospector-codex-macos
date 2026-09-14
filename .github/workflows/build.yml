@@ -24,6 +24,7 @@ jobs:
         run: |
           app="Prospector Codex.app"
           mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          cp Resources/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
           cp .build/release/ProspectorCodexMacOS "$app/Contents/MacOS/ProspectorCodexMacOS"
           chmod +x "$app/Contents/MacOS/ProspectorCodexMacOS"
           cat > "$app/Contents/Info.plist" <<'PLIST'
@@ -36,6 +37,7 @@ jobs:
           <key>CFBundleIdentifier</key><string>dev.s7venyoung.prospector-codex</string>
           <key>CFBundleName</key><string>Prospector Codex</string>
           <key>CFBundlePackageType</key><string>APPL</string>
+          <key>CFBundleIconFile</key><string>AppIcon</string>
           <key>LSUIElement</key><true/>
           <key>CFBundleShortVersionString</key><string>0.1.0</string>
           <key>CFBundleVersion</key><string>${GITHUB_RUN_NUMBER}</string>
