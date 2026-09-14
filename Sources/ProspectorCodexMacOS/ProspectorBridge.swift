@@ -66,7 +66,10 @@ enum CodexMetricsReader {
 final class ProspectorSerialBridge {
     private let subsystemIdentifier = "s7venyoung__codex_metrics"
     private var port: SerialPort?
-    private var nextRequestID: UInt32 = 1
+    // Match the ZMK TypeScript client: its first RPC omits request_id, which
+    // protobuf decodes as zero. Some Prospector firmware revisions preserve
+    // that behaviour in their response path.
+    private var nextRequestID: UInt32 = 0
 
     func connectAndSync(_ metrics: CodexMetrics) throws {
         let device = try receiverPath()
@@ -208,9 +211,11 @@ private enum Proto {
     }
 
     static func requestID(in response: [UInt8]) -> UInt32? {
-        guard let requestResponse = try? child(field: 1, in: response),
-              let id = try? unsigned(field: 1, in: requestResponse) else { return nil }
-        return UInt32(id)
+        guard let requestResponse = try? child(field: 1, in: response) else { return nil }
+        // Proto3 omits scalar fields whose value is zero. The receiver's
+        // first response therefore has no request_id bytes, but is still the
+        // response to request 0 rather than a malformed frame.
+        return UInt32((try? unsigned(field: 1, in: requestResponse)) ?? 0)
     }
 
     static func child(field target: UInt64, in data: [UInt8]) throws -> [UInt8] {
