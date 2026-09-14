@@ -137,8 +137,9 @@ private final class SerialPort {
     func readFrame(timeout: TimeInterval) throws -> [UInt8] {
         let end = Date().addingTimeInterval(timeout)
         var buffer = [UInt8](repeating: 0, count: 256)
+        let bufferLength = buffer.count
         while Date() < end {
-            let count = buffer.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, buffer.count) }
+            let count = buffer.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, bufferLength) }
             if count > 0 {
                 for byte in buffer.prefix(Int(count)) {
                     if let complete = receive(byte) { return complete }
