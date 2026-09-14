@@ -23,7 +23,17 @@ jobs:
       - name: Package macOS application
         run: |
           app="Prospector Codex.app"
-          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources/AppIcon.iconset"
+          for size in 16 32 128 256 512; do
+            sips -z "$size" "$size" AppIcon.svg --out "$app/Contents/Resources/AppIcon.iconset/icon_${size}x${size}.png" >/dev/null
+          done
+          cp "$app/Contents/Resources/AppIcon.iconset/icon_32x32.png" "$app/Contents/Resources/AppIcon.iconset/icon_16x16@2x.png"
+          cp "$app/Contents/Resources/AppIcon.iconset/icon_64x64.png" "$app/Contents/Resources/AppIcon.iconset/icon_32x32@2x.png" 2>/dev/null || cp "$app/Contents/Resources/AppIcon.iconset/icon_32x32.png" "$app/Contents/Resources/AppIcon.iconset/icon_32x32@2x.png"
+          cp "$app/Contents/Resources/AppIcon.iconset/icon_128x128.png" "$app/Contents/Resources/AppIcon.iconset/icon_128x128@2x.png"
+          cp "$app/Contents/Resources/AppIcon.iconset/icon_256x256.png" "$app/Contents/Resources/AppIcon.iconset/icon_128x128@2x.png"
+          cp "$app/Contents/Resources/AppIcon.iconset/icon_512x512.png" "$app/Contents/Resources/AppIcon.iconset/icon_256x256@2x.png"
+          iconutil -c icns "$app/Contents/Resources/AppIcon.iconset" -o "$app/Contents/Resources/AppIcon.icns"
+          rm -rf "$app/Contents/Resources/AppIcon.iconset"
           cp .build/release/ProspectorCodexMacOS "$app/Contents/MacOS/ProspectorCodexMacOS"
           chmod +x "$app/Contents/MacOS/ProspectorCodexMacOS"
           cat > "$app/Contents/Info.plist" <<'PLIST'
@@ -36,12 +46,15 @@ jobs:
           <key>CFBundleIdentifier</key><string>dev.s7venyoung.prospector-codex</string>
           <key>CFBundleName</key><string>Prospector Codex</string>
           <key>CFBundlePackageType</key><string>APPL</string>
+          <key>CFBundleIconFile</key><string>AppIcon</string>
+          <key>LSUIElement</key><true/>
           <key>CFBundleShortVersionString</key><string>0.1.0</string>
           <key>CFBundleVersion</key><string>${GITHUB_RUN_NUMBER}</string>
           <key>LSMinimumSystemVersion</key><string>13.0</string>
           </dict>
           </plist>
           PLIST
+          codesign --deep --force --verify --verbose --sign - "$app"
           mkdir -p artifact
           hdiutil create -volname "Prospector Codex" -srcfolder "$app" -ov -format UDZO "artifact/ProspectorCodexMacOS.dmg"
 
