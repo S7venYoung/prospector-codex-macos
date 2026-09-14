@@ -20,14 +20,33 @@ jobs:
       - name: Build
         run: swift build -c release
 
-      - name: Package executable
+      - name: Package macOS application
         run: |
+          app="Prospector Codex.app"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          cp .build/release/ProspectorCodexMacOS "$app/Contents/MacOS/ProspectorCodexMacOS"
+          chmod +x "$app/Contents/MacOS/ProspectorCodexMacOS"
+          cat > "$app/Contents/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+          <key>CFBundleDisplayName</key><string>Prospector Codex</string>
+          <key>CFBundleExecutable</key><string>ProspectorCodexMacOS</string>
+          <key>CFBundleIdentifier</key><string>dev.s7venyoung.prospector-codex</string>
+          <key>CFBundleName</key><string>Prospector Codex</string>
+          <key>CFBundlePackageType</key><string>APPL</string>
+          <key>CFBundleShortVersionString</key><string>0.1.0</string>
+          <key>CFBundleVersion</key><string>${GITHUB_RUN_NUMBER}</string>
+          <key>LSMinimumSystemVersion</key><string>13.0</string>
+          </dict>
+          </plist>
+          PLIST
           mkdir -p artifact
-          cp .build/release/ProspectorCodexMacOS artifact/ProspectorCodexMacOS
-          ditto -c -k --sequesterRsrc --keepParent artifact ProspectorCodexMacOS-macos.zip
+          hdiutil create -volname "Prospector Codex" -srcfolder "$app" -ov -format UDZO "artifact/ProspectorCodexMacOS.dmg"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: ProspectorCodexMacOS-macos
-          path: ProspectorCodexMacOS-macos.zip
+          path: artifact/ProspectorCodexMacOS.dmg
