@@ -110,8 +110,16 @@ final class ProspectorSerialBridge {
         nextRequestID += 1
         let request = Proto.field(1, value: UInt64(id)) + Proto.field(100, bytes: custom)
         try port.write(Framing.encode(request))
-        let response = try port.readFrame(timeout: 6)
-        return response
+        let deadline = Date().addingTimeInterval(6)
+        while Date() < deadline {
+            do {
+                let response = try port.readFrame(timeout: 0.5)
+                if Proto.requestID(in: response) == id { return response }
+            } catch {
+                if Date() >= deadline { throw error }
+            }
+        }
+        throw BridgeError.serial("接收器响应超时；请退出 DYA 后重试")
     }
 }
 
@@ -197,6 +205,12 @@ private enum Proto {
             result[identifier] = UInt32(index)
         }
         return result
+    }
+
+    static func requestID(in response: [UInt8]) -> UInt32? {
+        guard let requestResponse = try? child(field: 1, in: response),
+              let id = try? unsigned(field: 1, in: requestResponse) else { return nil }
+        return UInt32(id)
     }
 
     static func child(field target: UInt64, in data: [UInt8]) throws -> [UInt8] {
