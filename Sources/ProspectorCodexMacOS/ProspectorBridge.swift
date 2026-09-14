@@ -80,8 +80,13 @@ final class ProspectorSerialBridge {
     private func receiverPath() throws -> String {
         let paths = (try? FileManager.default.contentsOfDirectory(atPath: "/dev")) ?? []
         let candidates = paths.filter { $0.hasPrefix("cu.") && ($0.localizedCaseInsensitiveContains("usbmodem") || $0.localizedCaseInsensitiveContains("usbserial")) }
-        guard let first = candidates.sorted().first else { throw BridgeError.noReceiver }
-        return "/dev/" + first
+        // DYA identifies this receiver as usbmodem11304. Prefer it when both
+        // the receiver and another USB CDC device are attached.
+        let receiver = candidates.first { $0.localizedCaseInsensitiveContains("usbmodem11304") }
+            ?? candidates.first { $0.localizedCaseInsensitiveContains("prospector") }
+            ?? candidates.sorted().last
+        guard let receiver else { throw BridgeError.noReceiver }
+        return "/dev/" + receiver
     }
 
     private func requestList() throws -> [String: UInt32] {
