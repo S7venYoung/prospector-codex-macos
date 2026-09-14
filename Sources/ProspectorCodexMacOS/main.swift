@@ -26,16 +26,16 @@ struct ProspectorCodexMacOSApp: App {
 
         Window("Prospector Codex", id: "dashboard") {
             ContentView()
-                .frame(minWidth: 520, minHeight: 620)
+                .frame(width: 540, height: 640)
         }
         .defaultPosition(.center)
+        .defaultSize(width: 540, height: 640)
+        .windowResizability(.contentSize)
     }
 }
 
 struct ContentView: View {
-    @State private var used = "--%"
-    @State private var tokens = "--"
-    @State private var status = "未连接接收器"
+    @StateObject private var model = SyncModel()
 
     var body: some View {
         VStack(spacing: 18) {
@@ -49,17 +49,62 @@ struct ContentView: View {
             .background(Color(red: 1, green: 0.75, blue: 0.09))
             .clipShape(RoundedRectangle(cornerRadius: 22))
 
-            MetricCard(title: "5 HOUR USED", value: used, color: .yellow)
-            MetricCard(title: "TODAY TOTAL TOKEN", value: tokens, color: .white)
+            MetricCard(title: "5 HOUR USED", value: model.used, color: .yellow)
+            MetricCard(title: "TODAY TOTAL TOKEN", value: model.tokens, color: .white)
 
-            Text(status).foregroundStyle(.secondary)
-            Button("连接并同步") { status = "原生串口模块准备中…" }
+            Text(model.status).foregroundStyle(.secondary)
+            Button(model.connecting ? "正在连接…" : "连接并同步") { model.connect() }
                 .buttonStyle(.borderedProminent)
                 .tint(.yellow)
                 .foregroundStyle(.black)
+                .disabled(model.connecting)
         }
         .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(red: 0.06, green: 0.08, blue: 0.07))
+        .onAppear { model.refreshPreview() }
+    }
+}
+
+@MainActor
+final class SyncModel: ObservableObject {
+    @Published var used = "--%"
+    @Published var tokens = "--"
+    @Published var status = "未连接接收器"
+    @Published var connecting = false
+
+    func refreshPreview() {
+        let metrics = CodexMetricsReader.read()
+        used = metrics.usedPercent.map { "\($0)%" } ?? "--%"
+        tokens = compact(metrics.totalTokens)
+    }
+
+    func connect() {
+        connecting = true
+        status = "正在连接 Prospector 接收器…"
+        DispatchQueue.global(qos: .userInitiated).async {
+            let metrics = CodexMetricsReader.read()
+            do {
+                try ProspectorSerialBridge().connectAndSync(metrics)
+                DispatchQueue.main.async {
+                    self.used = metrics.usedPercent.map { "\($0)%" } ?? "--%"
+                    self.tokens = self.compact(metrics.totalTokens)
+                    self.status = "已同步 · \(Date.now.formatted(date: .omitted, time: .shortened))"
+                    self.connecting = false
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.status = error.localizedDescription
+                    self.connecting = false
+                }
+            }
+        }
+    }
+
+    private func compact(_ value: UInt32) -> String {
+        if value >= 1_000_000 { return String(format: "%.1fM", Double(value) / 1_000_000) }
+        if value >= 1_000 { return String(format: "%.1fK", Double(value) / 1_000) }
+        return String(value)
     }
 }
 
