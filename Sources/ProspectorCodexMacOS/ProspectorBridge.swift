@@ -122,7 +122,9 @@ private final class SerialPort {
         var options = termios()
         guard tcgetattr(fd, &options) == 0 else { close(fd); throw BridgeError.serial("无法读取串口设置") }
         cfmakeraw(&options)
-        cfsetspeed(&options, speed_t(12500))
+        // USB CDC ACM ignores the nominal baud rate, but macOS termios rejects
+        // Web Serial's non-standard 12500 value. Use a supported host setting.
+        cfsetspeed(&options, speed_t(B115200))
         options.c_cflag |= tcflag_t(CLOCAL | CREAD)
         guard tcsetattr(fd, TCSANOW, &options) == 0 else { close(fd); throw BridgeError.serial("无法配置串口") }
     }
