@@ -127,7 +127,8 @@ final class ProspectorSerialBridge {
                 + Proto.field(4, value: UInt64(status.observedAt))
                 + Proto.field(5, value: Proto.zigZag(status.highTemperatureDeciC))
                 + Proto.field(6, value: Proto.zigZag(status.lowTemperatureDeciC))
-                + Proto.field(7, value: UInt64(status.rainProbability))))
+                + Proto.field(7, value: UInt64(status.rainProbability))
+                + Proto.field(8, value: Proto.zigZag(status.timezoneOffsetMinutes))))
         let call = Proto.field(1, value: UInt64(subsystemIndex)) + Proto.field(2, bytes: payload)
         _ = try self.call(custom: Proto.field(2, bytes: call))
     }
