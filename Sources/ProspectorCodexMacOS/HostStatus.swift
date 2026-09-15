@@ -8,6 +8,7 @@ struct HostStatus {
     let highTemperatureDeciC: Int32
     let lowTemperatureDeciC: Int32
     let rainProbability: UInt32
+    let timezoneOffsetMinutes: Int32
 }
 
 enum HostStatusReader {
@@ -19,7 +20,8 @@ enum HostStatusReader {
         let now = UInt32(Date().timeIntervalSince1970)
         guard weatherEnabled else {
             return HostStatus(unixTime: now, temperatureDeciC: 0, weatherCode: 255, observedAt: now,
-                              highTemperatureDeciC: 0, lowTemperatureDeciC: 0, rainProbability: 0)
+                              highTemperatureDeciC: 0, lowTemperatureDeciC: 0, rainProbability: 0,
+                              timezoneOffsetMinutes: Int32(TimeZone.current.secondsFromGMT() / 60))
         }
         let latitude = defaults.string(forKey: "prospector.weatherLatitude").flatMap(Double.init) ?? 31.2304
         let longitude = defaults.string(forKey: "prospector.weatherLongitude").flatMap(Double.init) ?? 121.4737
@@ -28,7 +30,8 @@ enum HostStatusReader {
                           weatherCode: weather.code, observedAt: now,
                           highTemperatureDeciC: weather.highTemperatureDeciC,
                           lowTemperatureDeciC: weather.lowTemperatureDeciC,
-                          rainProbability: weather.rainProbability)
+                          rainProbability: weather.rainProbability,
+                          timezoneOffsetMinutes: Int32(TimeZone.current.secondsFromGMT() / 60))
     }
 }
 
