@@ -1,6 +1,10 @@
 import Foundation
 import Darwin
 
+// IOKit/serial/ioss.h: IOSSIOSPEED, expanded for 64-bit macOS speed_t.
+// Web Serial opens the Prospector CDC endpoint at exactly 12500 baud.
+private let iosSerialSpeed: UInt = 0x8008_5402
+
 struct CodexMetrics {
     let usedPercent: Int?
     let totalTokens: UInt32
@@ -178,11 +182,17 @@ private final class SerialPort {
         var options = termios()
         guard tcgetattr(fd, &options) == 0 else { close(fd); throw BridgeError.serial("æ æ³è¯»åä¸²å£è®¾ç½®") }
         cfmakeraw(&options)
-        // USB CDC ACM ignores the nominal baud rate, but macOS termios rejects
-        // Web Serial's non-standard 12500 value. Use a supported host setting.
-        cfsetspeed(&options, speed_t(B115200))
+        // Match ZMK Studio / Chromium Web Serial exactly. The receiver's CDC
+        // endpoint expects line coding 12500; B115200 causes its RPC replies
+        // to time out even though the device node opens successfully.
+        cfsetspeed(&options, speed_t(B9600))
         options.c_cflag |= tcflag_t(CLOCAL | CREAD)
         guard tcsetattr(fd, TCSANOW, &options) == 0 else { close(fd); throw BridgeError.serial("æ æ³éç½®ä¸²å£") }
+        var requestedSpeed: speed_t = 12_500
+        guard ioctl(fd, iosSerialSpeed, &requestedSpeed) != -1 else {
+            close(fd)
+            throw BridgeError.serial("æ æ³å° Prospector ä¸²å£è®¾ä¸º 12500 æ³¢ç¹ç")
+        }
     }
 
     deinit { close(fd) }
