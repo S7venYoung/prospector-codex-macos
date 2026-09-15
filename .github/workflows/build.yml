@@ -22,7 +22,7 @@ jobs:
 
       - name: Package macOS application
         run: |
-          app="Prospector Codex.app"
+          app="Prospector.app"
           mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
           cp Resources/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
           cp .build/release/ProspectorCodexMacOS "$app/Contents/MacOS/ProspectorCodexMacOS"
@@ -32,10 +32,10 @@ jobs:
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
-          <key>CFBundleDisplayName</key><string>Prospector Codex</string>
+          <key>CFBundleDisplayName</key><string>Prospector</string>
           <key>CFBundleExecutable</key><string>ProspectorCodexMacOS</string>
           <key>CFBundleIdentifier</key><string>dev.s7venyoung.prospector-codex</string>
-          <key>CFBundleName</key><string>Prospector Codex</string>
+          <key>CFBundleName</key><string>Prospector</string>
           <key>CFBundlePackageType</key><string>APPL</string>
           <key>CFBundleIconFile</key><string>AppIcon</string>
           <key>LSUIElement</key><true/>
@@ -47,10 +47,10 @@ jobs:
           PLIST
           codesign --deep --force --verify --verbose --sign - "$app"
           mkdir -p artifact
-          hdiutil create -volname "Prospector Codex" -srcfolder "$app" -ov -format UDZO "artifact/ProspectorCodexMacOS.dmg"
+          hdiutil create -volname "Prospector" -srcfolder "$app" -ov -format UDZO "artifact/Prospector.dmg"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ProspectorCodexMacOS-macos
-          path: artifact/ProspectorCodexMacOS.dmg
+          name: Prospector-macos
+          path: artifact/Prospector.dmg

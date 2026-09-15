@@ -2,123 +2,155 @@ import SwiftUI
 import AppKit
 
 @main
-struct ProspectorCodexMacOSApp: App {
+struct ProspectorMacOSApp: App {
     @Environment(\.openWindow) private var openWindow
 
-    init() {
-        // Accessory apps stay out of the Dock while remaining available from the menu bar.
-        NSApplication.shared.setActivationPolicy(.accessory)
-    }
+    init() { NSApplication.shared.setActivationPolicy(.accessory) }
 
     var body: some Scene {
-        MenuBarExtra("Prospector Codex", systemImage: "circle.hexagongrid.fill") {
-            Button("打开 Prospector Codex") {
-                openWindow(id: "dashboard")
+        MenuBarExtra("Prospector", systemImage: "display") {
+            Button("打开 Prospector 设置") {
+                openWindow(id: "settings")
                 NSApplication.shared.activate(ignoringOtherApps: true)
             }
             Divider()
-            Text("接收器：等待连接")
-                .foregroundStyle(.secondary)
-            Button("退出") {
-                NSApplication.shared.terminate(nil)
-            }
+            Button("退出") { NSApplication.shared.terminate(nil) }
         }
 
-        Window("Prospector Codex", id: "dashboard") {
-            ContentView()
-                .frame(width: 540, height: 640)
+        Window("Prospector", id: "settings") {
+            ProspectorSettingsView().frame(width: 680, height: 470)
         }
         .defaultPosition(.center)
-        .defaultSize(width: 540, height: 640)
+        .defaultSize(width: 680, height: 470)
         .windowResizability(.contentSize)
     }
 }
 
-struct ContentView: View {
-    @StateObject private var model = SyncModel()
+private enum SettingsSection: String, CaseIterable, Identifiable {
+    case sync = "同步"
+    case environment = "时间与天气"
+    var id: String { rawValue }
+    var icon: String { self == .sync ? "arrow.triangle.2.circlepath" : "cloud.sun" }
+}
+
+struct ProspectorSettingsView: View {
+    @State private var section: SettingsSection? = .sync
 
     var body: some View {
-        VStack(spacing: 18) {
-            HStack {
-                Text("● ●").foregroundStyle(.black)
-                Text("CODEX // PROSPECTOR").font(.system(size: 26, weight: .black, design: .monospaced))
-                Spacer()
-                Text("USB ●").font(.system(.headline, design: .monospaced))
+        NavigationSplitView {
+            List(SettingsSection.allCases, selection: $section) { item in
+                Label(item.rawValue, systemImage: item.icon).tag(item)
             }
-            .padding(20)
-            .background(Color(red: 1, green: 0.75, blue: 0.09))
-            .clipShape(RoundedRectangle(cornerRadius: 22))
-
-            MetricCard(title: "5 HOUR USED", value: model.used, color: .yellow)
-            MetricCard(title: "TODAY TOTAL TOKEN", value: model.tokens, color: .white)
-
-            Text(model.status).foregroundStyle(.secondary)
-            Button(model.connecting ? "正在连接…" : "连接并同步") { model.connect() }
-                .buttonStyle(.borderedProminent)
-                .tint(.yellow)
-                .foregroundStyle(.black)
-                .disabled(model.connecting)
+            .navigationTitle("Prospector")
+        } detail: {
+            switch section ?? .sync {
+            case .sync: SyncSettingsView()
+            case .environment: EnvironmentSettingsView()
+            }
         }
-        .padding(24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(red: 0.06, green: 0.08, blue: 0.07))
-        .onAppear { model.refreshPreview() }
+    }
+}
+
+struct SyncSettingsView: View {
+    @StateObject private var model = SyncModel()
+    @AppStorage("prospector.autoSync") private var enabled = true
+    @AppStorage("prospector.syncMinutes") private var interval = 5
+
+    var body: some View {
+        Form {
+            Section("接收器同步") {
+                Toggle("启用后台同步", isOn: $enabled)
+                    .onChange(of: enabled) { model.configure(enabled: $0, minutes: interval) }
+                Picker("同步间隔", selection: $interval) {
+                    Text("每 1 分钟").tag(1)
+                    Text("每 5 分钟").tag(5)
+                    Text("每 15 分钟").tag(15)
+                    Text("每 30 分钟").tag(30)
+                }
+                .disabled(!enabled)
+                .onChange(of: interval) { model.configure(enabled: enabled, minutes: $0) }
+            }
+
+            Section("状态") {
+                LabeledContent("接收器", value: model.status)
+                Button(model.syncing ? "正在同步…" : "立即同步") { model.syncNow() }
+                    .disabled(model.syncing)
+            }
+        }
+        .formStyle(.grouped)
+        .padding(22)
+        .navigationTitle("同步")
+        .onAppear { model.configure(enabled: enabled, minutes: interval) }
+        .onDisappear { model.stop() }
+    }
+}
+
+struct EnvironmentSettingsView: View {
+    @AppStorage("prospector.syncClock") private var syncClock = true
+    @AppStorage("prospector.syncWeather") private var syncWeather = true
+    @AppStorage("prospector.weatherPlace") private var place = "Shanghai"
+    @AppStorage("prospector.weatherLatitude") private var latitude = "31.2304"
+    @AppStorage("prospector.weatherLongitude") private var longitude = "121.4737"
+
+    var body: some View {
+        Form {
+            Section("主机时间") {
+                Toggle("同步 Mac 时间", isOn: $syncClock)
+                Text("开启后，后台同步会将当前本地时间发送给支持 host-status 的主题。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("天气") {
+                Toggle("同步天气", isOn: $syncWeather)
+                TextField("地点名称", text: $place)
+                HStack {
+                    TextField("纬度", text: $latitude)
+                    TextField("经度", text: $longitude)
+                }
+            }
+            Section {
+                Text("天气使用 Open-Meteo，无需 API 密钥。此页只配置通用 host-status 数据，不会更改当前主题。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .padding(22)
+        .navigationTitle("时间与天气")
     }
 }
 
 @MainActor
 final class SyncModel: ObservableObject {
-    @Published var used = "--%"
-    @Published var tokens = "--"
-    @Published var status = "未连接接收器"
-    @Published var connecting = false
+    @Published var status = "未连接"
+    @Published var syncing = false
+    private var timer: Timer?
 
-    func refreshPreview() {
-        let metrics = CodexMetricsReader.read()
-        used = metrics.usedPercent.map { "\($0)%" } ?? "--%"
-        tokens = compact(metrics.totalTokens)
+    func configure(enabled: Bool, minutes: Int) {
+        stop()
+        guard enabled else { status = "后台同步已关闭"; return }
+        syncNow()
+        timer = Timer.scheduledTimer(withTimeInterval: TimeInterval(max(1, minutes) * 60), repeats: true) { [weak self] _ in
+            self?.syncNow()
+        }
     }
 
-    func connect() {
-        connecting = true
-        status = "正在连接 Prospector 接收器…"
-        DispatchQueue.global(qos: .userInitiated).async {
+    func stop() { timer?.invalidate(); timer = nil }
+
+    func syncNow() {
+        guard !syncing else { return }
+        syncing = true
+        status = "正在同步…"
+        DispatchQueue.global(qos: .utility).async {
             let metrics = CodexMetricsReader.read()
+            let hostStatus = HostStatusReader.read()
             do {
-                try ProspectorSerialBridge().connectAndSync(metrics)
+                try ProspectorSerialBridge().connectAndSync(metrics, hostStatus: hostStatus)
                 DispatchQueue.main.async {
-                    self.used = metrics.usedPercent.map { "\($0)%" } ?? "--%"
-                    self.tokens = self.compact(metrics.totalTokens)
                     self.status = "已同步 · \(Date.now.formatted(date: .omitted, time: .shortened))"
-                    self.connecting = false
+                    self.syncing = false
                 }
             } catch {
-                DispatchQueue.main.async {
-                    self.status = error.localizedDescription
-                    self.connecting = false
-                }
+                DispatchQueue.main.async { self.status = error.localizedDescription; self.syncing = false }
             }
         }
-    }
-
-    private func compact(_ value: UInt32) -> String {
-        if value >= 1_000_000 { return String(format: "%.1fM", Double(value) / 1_000_000) }
-        if value >= 1_000 { return String(format: "%.1fK", Double(value) / 1_000) }
-        return String(value)
-    }
-}
-
-struct MetricCard: View {
-    let title: String
-    let value: String
-    let color: Color
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title).font(.system(size: 18, weight: .bold, design: .monospaced)).foregroundStyle(.white)
-            Text(value).font(.system(size: 70, weight: .black, design: .monospaced)).foregroundStyle(color)
-                .frame(maxWidth: .infinity, alignment: .center)
-        }
-        .padding(18)
-        .overlay(RoundedRectangle(cornerRadius: 20).stroke(.yellow, lineWidth: 2))
     }
 }

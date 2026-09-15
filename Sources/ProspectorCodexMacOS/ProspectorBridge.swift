@@ -65,19 +65,24 @@ enum CodexMetricsReader {
 
 final class ProspectorSerialBridge {
     private let subsystemIdentifier = "s7venyoung__codex_metrics"
+    private let hostStatusSubsystemIdentifier = "s7venyoung__host_status"
     private var port: SerialPort?
     // Match the ZMK TypeScript client: its first RPC omits request_id, which
     // protobuf decodes as zero. Some Prospector firmware revisions preserve
     // that behaviour in their response path.
     private var nextRequestID: UInt32 = 0
 
-    func connectAndSync(_ metrics: CodexMetrics) throws {
+    func connectAndSync(_ metrics: CodexMetrics, hostStatus: HostStatus? = nil) throws {
         let device = try receiverPath()
         let serial = try SerialPort(path: device)
         port = serial
         let list = try requestList()
         guard let index = list[subsystemIdentifier] else { throw BridgeError.subsystemMissing }
         try requestMetrics(subsystemIndex: index, metrics: metrics)
+        // Host status is optional so old receiver firmware keeps working.
+        if let hostStatus, let hostIndex = list[hostStatusSubsystemIdentifier] {
+            try requestHostStatus(subsystemIndex: hostIndex, status: hostStatus)
+        }
     }
 
     private func receiverPath() throws -> String {
@@ -103,6 +108,17 @@ final class ProspectorSerialBridge {
             + Proto.field(2, value: UInt64(metrics.totalTokens))
             + Proto.field(3, value: UInt64(metrics.updatedAt))
         let payload = Proto.field(1, bytes: Proto.field(1, bytes: body))
+        let call = Proto.field(1, value: UInt64(subsystemIndex)) + Proto.field(2, bytes: payload)
+        _ = try self.call(custom: Proto.field(2, bytes: call))
+    }
+
+    private func requestHostStatus(subsystemIndex: UInt32, status: HostStatus) throws {
+        let payload = Proto.field(1, bytes:
+            Proto.field(1, bytes:
+                Proto.field(1, value: UInt64(status.unixTime))
+                + Proto.field(2, value: Proto.zigZag(status.temperatureDeciC))
+                + Proto.field(3, value: UInt64(status.weatherCode))
+                + Proto.field(4, value: UInt64(status.observedAt))))
         let call = Proto.field(1, value: UInt64(subsystemIndex)) + Proto.field(2, bytes: payload)
         _ = try self.call(custom: Proto.field(2, bytes: call))
     }
@@ -196,6 +212,9 @@ private enum Proto {
     static func field(_ number: UInt64, value: UInt64) -> [UInt8] { var out = varint(number << 3); out += varint(value); return out }
     static func field(_ number: UInt64, bytes: [UInt8]) -> [UInt8] { var out = varint((number << 3) | 2); out += varint(UInt64(bytes.count)); out += bytes; return out }
     static func varint(_ value: UInt64) -> [UInt8] { var n = value; var out: [UInt8] = []; repeat { var b = UInt8(n & 0x7F); n >>= 7; if n != 0 { b |= 0x80 }; out.append(b) } while n != 0; return out }
+    static func zigZag(_ value: Int32) -> UInt64 {
+        UInt64(UInt32(bitPattern: (value << 1) ^ (value >> 31)))
+    }
 
     static func subsystems(from response: [UInt8]) throws -> [String: UInt32] {
         let responseBody = try child(field: 1, in: response)
