@@ -32,23 +32,38 @@ enum CodexMetricsReader {
         var tokens: UInt64 = 0
         var newest = Date.distantPast
         var used: Int?
+        let timestampFormatter = ISO8601DateFormatter()
 
-        for offset in 0..<4 {
-            guard let day = calendar.date(byAdding: .day, value: -offset, to: now) else { continue }
-            let parts = calendar.dateComponents([.year, .month, .day], from: day)
-            let directory = root.appendingPathComponent(String(format: "%04d/%02d/%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0))
-            let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
-            for file in files where file.pathExtension == "jsonl" {
-                guard let text = try? String(contentsOf: file, encoding: .utf8) else { continue }
-                for line in text.split(separator: "\n") {
+        // A session can span midnight and remains in the directory in which it
+        // began. Directory names therefore cannot be used as the data date.
+        let files = (FileManager.default.enumerator(at: root,
+                                                    includingPropertiesForKeys: [.isRegularFileKey])?
+            .compactMap { $0 as? URL }
+            .filter { $0.pathExtension == "jsonl" }) ?? []
+        for file in files {
+            guard let text = try? String(contentsOf: file, encoding: .utf8) else { continue }
+            var previousTotal: UInt64?
+            for line in text.split(separator: "\n") {
                     guard let json = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
                           let payload = json["payload"] as? [String: Any] else { continue }
-                    let timestamp = (json["timestamp"] as? String).flatMap(ISO8601DateFormatter().date(from:))
-                    if payload["type"] as? String == "token_count", let timestamp, timestamp >= midnight,
-                       let info = payload["info"] as? [String: Any], let usage = info["last_token_usage"] as? [String: Any] {
-                        tokens += UInt64(usage["input_tokens"] as? Int ?? 0)
-                        tokens += UInt64(usage["cache_write_input_tokens"] as? Int ?? 0)
-                        tokens += UInt64(usage["output_tokens"] as? Int ?? 0)
+                    let timestamp = (json["timestamp"] as? String).flatMap(timestampFormatter.date(from:))
+                    if payload["type"] as? String == "token_count",
+                       let info = payload["info"] as? [String: Any],
+                       let usage = info["total_token_usage"] as? [String: Any],
+                       let total = (usage["total_tokens"] as? NSNumber)?.uint64Value {
+                        // total_token_usage is cumulative for a session. Only
+                        // add its increase since the preceding event, never the
+                        // whole cumulative value again.
+                        if let timestamp, timestamp >= midnight {
+                            if let previousTotal, total >= previousTotal {
+                                tokens += total - previousTotal
+                            } else if let last = info["last_token_usage"] as? [String: Any],
+                                      let initial = (last["total_tokens"] as? NSNumber)?.uint64Value {
+                                // First post-midnight sample of a new/unknown file.
+                                tokens += initial
+                            }
+                        }
+                        previousTotal = total
                     }
                     if let timestamp, timestamp > newest,
                        let limits = payload["rate_limits"] as? [String: Any],
@@ -56,7 +71,6 @@ enum CodexMetricsReader {
                         newest = timestamp
                         used = min(100, max(0, Int(value.rounded())))
                     }
-                }
             }
         }
         return CodexMetrics(usedPercent: used, totalTokens: UInt32(min(tokens, UInt64(UInt32.max))), updatedAt: UInt32(Date().timeIntervalSince1970))
