@@ -15,9 +15,9 @@ enum BridgeError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .noReceiver: return "未发现 Prospector 接收器；请确认 USB 已连接"
-        case .invalidResponse: return "接收器响应无效"
-        case .subsystemMissing: return "当前固件没有 Codex metrics 子系统"
+        case .noReceiver: return "æªåç° Prospector æ¥æ¶å¨ï¼è¯·ç¡®è®¤ USB å·²è¿æ¥"
+        case .invalidResponse: return "æ¥æ¶å¨ååºæ æ"
+        case .subsystemMissing: return "å½ååºä»¶æ²¡æ Codex metrics å­ç³»ç»"
         case .serial(let message): return message
         }
     }
@@ -67,10 +67,10 @@ final class ProspectorSerialBridge {
     private let subsystemIdentifier = "s7venyoung__codex_metrics"
     private let hostStatusSubsystemIdentifier = "s7venyoung__host_status"
     private var port: SerialPort?
-    // Match the ZMK TypeScript client: its first RPC omits request_id, which
-    // protobuf decodes as zero. Some Prospector firmware revisions preserve
-    // that behaviour in their response path.
-    private var nextRequestID: UInt32 = 0
+    // Do not use zero: protobuf omits a zero request ID, the same shape used
+    // by asynchronous Studio notifications. Starting at one lets us ignore
+    // those notifications while waiting for an RPC response.
+    private var nextRequestID: UInt32 = 1
 
     func connectAndSync(_ metrics: CodexMetrics, hostStatus: HostStatus? = nil) throws {
         let device = try receiverPath()
@@ -78,8 +78,8 @@ final class ProspectorSerialBridge {
         port = serial
         let list = try requestList()
         var sent = false
-        // Weather Clock intentionally omits the Codex metrics endpoint. Its
-        // independent host-status RPC must still be allowed to synchronize.
+        // A receiver-only weather theme intentionally omits the Codex metrics
+        // endpoint. Do not let that prevent its independent clock/weather RPC.
         if let index = list[subsystemIdentifier] {
             try requestMetrics(subsystemIndex: index, metrics: metrics)
             sent = true
@@ -124,13 +124,16 @@ final class ProspectorSerialBridge {
                 Proto.field(1, value: UInt64(status.unixTime))
                 + Proto.field(2, value: Proto.zigZag(status.temperatureDeciC))
                 + Proto.field(3, value: UInt64(status.weatherCode))
-                + Proto.field(4, value: UInt64(status.observedAt))))
+                + Proto.field(4, value: UInt64(status.observedAt))
+                + Proto.field(5, value: Proto.zigZag(status.highTemperatureDeciC))
+                + Proto.field(6, value: Proto.zigZag(status.lowTemperatureDeciC))
+                + Proto.field(7, value: UInt64(status.rainProbability))))
         let call = Proto.field(1, value: UInt64(subsystemIndex)) + Proto.field(2, bytes: payload)
         _ = try self.call(custom: Proto.field(2, bytes: call))
     }
 
     private func call(custom: [UInt8]) throws -> [UInt8] {
-        guard let port else { throw BridgeError.serial("串口未打开") }
+        guard let port else { throw BridgeError.serial("ä¸²å£æªæå¼") }
         let id = nextRequestID
         nextRequestID += 1
         let request = Proto.field(1, value: UInt64(id)) + Proto.field(100, bytes: custom)
@@ -144,7 +147,7 @@ final class ProspectorSerialBridge {
                 if Date() >= deadline { throw error }
             }
         }
-        throw BridgeError.serial("接收器响应超时；请退出 DYA 后重试")
+        throw BridgeError.serial("æ¥æ¶å¨ååºè¶æ¶ï¼è¯·éåº DYA åéè¯")
     }
 }
 
@@ -156,22 +159,22 @@ private final class SerialPort {
 
     init(path: String) throws {
         fd = open(path, O_RDWR | O_NOCTTY | O_NONBLOCK)
-        guard fd >= 0 else { throw BridgeError.serial("无法打开 \(path)：\(String(cString: strerror(errno)))") }
+        guard fd >= 0 else { throw BridgeError.serial("æ æ³æå¼ \(path)ï¼\(String(cString: strerror(errno)))") }
         var options = termios()
-        guard tcgetattr(fd, &options) == 0 else { close(fd); throw BridgeError.serial("无法读取串口设置") }
+        guard tcgetattr(fd, &options) == 0 else { close(fd); throw BridgeError.serial("æ æ³è¯»åä¸²å£è®¾ç½®") }
         cfmakeraw(&options)
         // USB CDC ACM ignores the nominal baud rate, but macOS termios rejects
         // Web Serial's non-standard 12500 value. Use a supported host setting.
         cfsetspeed(&options, speed_t(B115200))
         options.c_cflag |= tcflag_t(CLOCAL | CREAD)
-        guard tcsetattr(fd, TCSANOW, &options) == 0 else { close(fd); throw BridgeError.serial("无法配置串口") }
+        guard tcsetattr(fd, TCSANOW, &options) == 0 else { close(fd); throw BridgeError.serial("æ æ³éç½®ä¸²å£") }
     }
 
     deinit { close(fd) }
 
     func write(_ bytes: [UInt8]) throws {
         let written = bytes.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, bytes.count) }
-        guard written == bytes.count else { throw BridgeError.serial("串口写入失败") }
+        guard written == bytes.count else { throw BridgeError.serial("ä¸²å£åå¥å¤±è´¥") }
     }
 
     func readFrame(timeout: TimeInterval) throws -> [UInt8] {
@@ -188,7 +191,7 @@ private final class SerialPort {
                 usleep(10_000)
             }
         }
-        throw BridgeError.serial("接收器响应超时；请退出 DYA 后重试")
+        throw BridgeError.serial("æ¥æ¶å¨ååºè¶æ¶ï¼è¯·éåº DYA åéè¯")
     }
 
     private func receive(_ byte: UInt8) -> [UInt8]? {
@@ -237,10 +240,8 @@ private enum Proto {
 
     static func requestID(in response: [UInt8]) -> UInt32? {
         guard let requestResponse = try? child(field: 1, in: response) else { return nil }
-        // Proto3 omits scalar fields whose value is zero. The receiver's
-        // first response therefore has no request_id bytes, but is still the
-        // response to request 0 rather than a malformed frame.
-        return UInt32((try? unsigned(field: 1, in: requestResponse)) ?? 0)
+        guard let id = try? unsigned(field: 1, in: requestResponse) else { return nil }
+        return UInt32(id)
     }
 
     static func child(field target: UInt64, in data: [UInt8]) throws -> [UInt8] {
