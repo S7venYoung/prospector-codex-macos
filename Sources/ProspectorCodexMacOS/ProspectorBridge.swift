@@ -77,12 +77,18 @@ final class ProspectorSerialBridge {
         let serial = try SerialPort(path: device)
         port = serial
         let list = try requestList()
-        guard let index = list[subsystemIdentifier] else { throw BridgeError.subsystemMissing }
-        try requestMetrics(subsystemIndex: index, metrics: metrics)
-        // Host status is optional so old receiver firmware keeps working.
+        var sent = false
+        // Weather Clock intentionally omits the Codex metrics endpoint. Its
+        // independent host-status RPC must still be allowed to synchronize.
+        if let index = list[subsystemIdentifier] {
+            try requestMetrics(subsystemIndex: index, metrics: metrics)
+            sent = true
+        }
         if let hostStatus, let hostIndex = list[hostStatusSubsystemIdentifier] {
             try requestHostStatus(subsystemIndex: hostIndex, status: hostStatus)
+            sent = true
         }
+        guard sent else { throw BridgeError.subsystemMissing }
     }
 
     private func receiverPath() throws -> String {
