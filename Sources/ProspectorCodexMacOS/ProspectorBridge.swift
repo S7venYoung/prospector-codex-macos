@@ -231,7 +231,9 @@ private enum Proto {
         let custom = try child(field: 1, in: requestResponse)
         var result: [String: UInt32] = [:]
         for info in children(field: 1, in: custom) {
-            let index = try unsigned(field: 1, in: info)
+            // The first registered subsystem uses protobuf's default index 0;
+            // proto3 omits that scalar entirely rather than encoding a zero.
+            let index = (try? unsigned(field: 1, in: info)) ?? 0
             let identifier = String(bytes: try child(field: 2, in: info), encoding: .utf8) ?? ""
             result[identifier] = UInt32(index)
         }
