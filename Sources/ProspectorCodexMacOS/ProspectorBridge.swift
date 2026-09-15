@@ -37,6 +37,10 @@ enum CodexMetricsReader {
         var newest = Date.distantPast
         var used: Int?
         let timestampFormatter = ISO8601DateFormatter()
+        // Codex writes timestamps such as 2026-09-15T09:27:22.481Z.
+        // ISO8601DateFormatter does not accept fractional seconds unless this
+        // option is set, which previously made every sample look unavailable.
+        timestampFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 
         // A session can span midnight and remains in the directory in which it
         // began. Directory names therefore cannot be used as the data date.
