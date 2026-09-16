@@ -236,8 +236,9 @@ private final class SerialPort {
     func readTextLine(timeout: TimeInterval) throws -> String {
         let end = Date().addingTimeInterval(timeout)
         var buffer = [UInt8](repeating: 0, count: 128)
+        let bufferLength = buffer.count
         while Date() < end {
-            let count = buffer.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, buffer.count) }
+            let count = buffer.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, bufferLength) }
             if count > 0 {
                 for byte in buffer.prefix(Int(count)) {
                     if byte == 0x0A {
