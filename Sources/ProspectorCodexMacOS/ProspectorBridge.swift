@@ -98,6 +98,17 @@ final class ProspectorSerialBridge {
         let device = try receiverPath()
         let serial = try SerialPort(path: device)
         port = serial
+        // Scanner firmware uses a small newline-delimited CDC protocol rather
+        // than ZMK Studio RPC. Probe it first; regular dongle firmware ignores
+        // this PING and continues with the existing Studio flow.
+        if try serial.isScanner() {
+            let left = max(0, min(100, 100 - (metrics.usedPercent ?? 0)))
+            try serial.writeText("CODEX \(left) \(metrics.totalTokens)\n")
+            guard try serial.readTextLine(timeout: 2).trimmingCharacters(in: .whitespacesAndNewlines) == "OK" else {
+                throw BridgeError.serial("Scanner did not confirm Codex data")
+            }
+            return
+        }
         let list = try requestList()
         var sent = false
         // A receiver-only weather theme intentionally omits the Codex metrics
@@ -179,6 +190,7 @@ private final class SerialPort {
     private var frame: [UInt8] = []
     private var started = false
     private var escaped = false
+    private var textBytes: [UInt8] = []
 
     init(path: String) throws {
         fd = open(path, O_RDWR | O_NOCTTY | O_NONBLOCK)
@@ -204,6 +216,42 @@ private final class SerialPort {
     func write(_ bytes: [UInt8]) throws {
         let written = bytes.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, bytes.count) }
         guard written == bytes.count else { throw BridgeError.serial("ä¸²å£åå¥å¤±è´¥") }
+    }
+
+    func writeText(_ text: String) throws {
+        try write(Array(text.utf8))
+    }
+
+    func isScanner() throws -> Bool {
+        try writeText("PING\n")
+        let deadline = Date().addingTimeInterval(1)
+        while Date() < deadline {
+            let line = try readTextLine(timeout: 0.2)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if line == "PROSPECTOR-SCANNER/1" { return true }
+        }
+        return false
+    }
+
+    func readTextLine(timeout: TimeInterval) throws -> String {
+        let end = Date().addingTimeInterval(timeout)
+        var buffer = [UInt8](repeating: 0, count: 128)
+        while Date() < end {
+            let count = buffer.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, buffer.count) }
+            if count > 0 {
+                for byte in buffer.prefix(Int(count)) {
+                    if byte == 0x0A {
+                        let line = String(bytes: textBytes, encoding: .utf8) ?? ""
+                        textBytes.removeAll(keepingCapacity: true)
+                        return line
+                    }
+                    if byte != 0x0D && textBytes.count < 256 { textBytes.append(byte) }
+                }
+            } else {
+                usleep(10_000)
+            }
+        }
+        throw BridgeError.serial("Scanner response timed out")
     }
 
     func readFrame(timeout: TimeInterval) throws -> [UInt8] {
