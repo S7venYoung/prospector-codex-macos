@@ -7,6 +7,7 @@ private let iosSerialSpeed: UInt = 0x8008_5402
 
 struct CodexMetrics {
     let usedPercent: Int?
+    let weekUsedPercent: Int?
     let totalTokens: UInt32
     let updatedAt: UInt32
 }
@@ -36,6 +37,7 @@ enum CodexMetricsReader {
         var tokens: UInt64 = 0
         var newest = Date.distantPast
         var used: Int?
+        var weekUsed: Int?
         let timestampFormatter = ISO8601DateFormatter()
         // Codex writes timestamps such as 2026-09-15T09:27:22.481Z.
         // ISO8601DateFormatter does not accept fractional seconds unless this
@@ -78,10 +80,16 @@ enum CodexMetricsReader {
                        let primary = limits["primary"] as? [String: Any], let value = primary["used_percent"] as? Double {
                         newest = timestamp
                         used = min(100, max(0, Int(value.rounded())))
+                        if let weekly = limits["secondary"] as? [String: Any],
+                           let weeklyValue = weekly["used_percent"] as? Double {
+                            weekUsed = min(100, max(0, Int(weeklyValue.rounded())))
+                        } else {
+                            weekUsed = nil
+                        }
                     }
             }
         }
-        return CodexMetrics(usedPercent: used, totalTokens: UInt32(min(tokens, UInt64(UInt32.max))), updatedAt: UInt32(Date().timeIntervalSince1970))
+        return CodexMetrics(usedPercent: used, weekUsedPercent: weekUsed, totalTokens: UInt32(min(tokens, UInt64(UInt32.max))), updatedAt: UInt32(Date().timeIntervalSince1970))
     }
 }
 
@@ -103,7 +111,11 @@ final class ProspectorSerialBridge {
         // this PING and continues with the existing Studio flow.
         if try serial.isScanner() {
             let left = max(0, min(100, 100 - (metrics.usedPercent ?? 0)))
-            try serial.writeText("CODEX \(left) \(metrics.totalTokens)\n")
+            var frame = "CODEX \(left) \(metrics.totalTokens)"
+            if let weeklyUsed = metrics.weekUsedPercent {
+                frame += " \(max(0, min(100, 100 - weeklyUsed)))"
+            }
+            try serial.writeText(frame + "\n")
             guard try serial.readTextLine(timeout: 2).trimmingCharacters(in: .whitespacesAndNewlines) == "OK" else {
                 throw BridgeError.serial("Scanner did not confirm Codex data")
             }
