@@ -158,7 +158,9 @@ final class ProspectorSerialBridge {
         let body = Proto.field(1, value: UInt64(metrics.usedPercent ?? 0))
             + Proto.field(2, value: UInt64(metrics.totalTokens))
             + Proto.field(3, value: UInt64(metrics.updatedAt))
-        let payload = Proto.field(1, bytes: Proto.field(1, bytes: body))
+        // CallRequest.payload is the custom Request message itself. Its first
+        // field is UpdateRequest, so body needs exactly one enclosing field.
+        let payload = Proto.field(1, bytes: body)
         let call = Proto.field(1, value: UInt64(subsystemIndex)) + Proto.field(2, bytes: payload)
         _ = try self.call(custom: Proto.field(2, bytes: call))
     }
