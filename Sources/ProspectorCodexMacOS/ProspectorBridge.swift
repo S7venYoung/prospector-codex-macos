@@ -83,8 +83,15 @@ enum CodexMetricsReader {
                         newest = timestamp
                         used = min(100, max(0, Int(value.rounded())))
                         if let resetAt = (primary["resets_at"] as? NSNumber)?.doubleValue {
-                            let seconds = max(0, resetAt - now.timeIntervalSince1970)
-                            resetInMinutes = UInt32(min(Double(UInt32.max), ceil(seconds / 60)))
+                            // The OLED shows the next window's local clock time
+                            // (for example 20:06), not a remaining-duration timer.
+                            let components = calendar.dateComponents([.hour, .minute],
+                                                                     from: Date(timeIntervalSince1970: resetAt))
+                            if let hour = components.hour, let minute = components.minute {
+                                resetInMinutes = UInt32(hour * 60 + minute)
+                            } else {
+                                resetInMinutes = nil
+                            }
                         } else {
                             resetInMinutes = nil
                         }
