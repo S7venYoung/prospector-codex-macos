@@ -123,17 +123,27 @@ final class SyncModel: ObservableObject {
     @Published var status = "未连接"
     @Published var syncing = false
     private var timer: Timer?
+    private var configuredInterval: Int?
 
     func configure(enabled: Bool, minutes: Int) {
+        let normalizedMinutes = max(1, minutes)
+        if enabled, configuredInterval == normalizedMinutes, timer != nil {
+            return
+        }
         stop()
         guard enabled else { status = "后台同步已关闭"; return }
+        configuredInterval = normalizedMinutes
         syncNow()
-        timer = Timer.scheduledTimer(withTimeInterval: TimeInterval(max(1, minutes) * 60), repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: TimeInterval(normalizedMinutes * 60), repeats: true) { [weak self] _ in
             self?.syncNow()
         }
     }
 
-    func stop() { timer?.invalidate(); timer = nil }
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+        configuredInterval = nil
+    }
 
     func syncNow() {
         guard !syncing else { return }
