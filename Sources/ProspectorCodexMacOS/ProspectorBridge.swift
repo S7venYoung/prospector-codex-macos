@@ -238,9 +238,15 @@ private final class SerialPort {
         try writeText("PING\n")
         let deadline = Date().addingTimeInterval(1)
         while Date() < deadline {
-            let line = try readTextLine(timeout: 0.2)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if line == "PROSPECTOR-SCANNER/1" { return true }
+            // Regular ZMK Studio receivers deliberately do not reply to the
+            // Scanner text probe. A short read timeout therefore means "not a
+            // scanner", not a failed serial connection; continue into the
+            // framed Studio RPC path below.
+            if let line = try? readTextLine(timeout: 0.2)
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               line == "PROSPECTOR-SCANNER/1" {
+                return true
+            }
         }
         return false
     }
