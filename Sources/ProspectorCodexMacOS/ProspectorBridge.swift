@@ -9,6 +9,7 @@ struct CodexMetrics {
     let usedPercent: Int?
     let weekUsedPercent: Int?
     let totalTokens: UInt32
+    let resetInMinutes: UInt32?
     let updatedAt: UInt32
 }
 
@@ -38,6 +39,7 @@ enum CodexMetricsReader {
         var newest = Date.distantPast
         var used: Int?
         var weekUsed: Int?
+        var resetInMinutes: UInt32?
         let timestampFormatter = ISO8601DateFormatter()
         // Codex writes timestamps such as 2026-09-15T09:27:22.481Z.
         // ISO8601DateFormatter does not accept fractional seconds unless this
@@ -80,6 +82,12 @@ enum CodexMetricsReader {
                        let primary = limits["primary"] as? [String: Any], let value = primary["used_percent"] as? Double {
                         newest = timestamp
                         used = min(100, max(0, Int(value.rounded())))
+                        if let resetAt = (primary["resets_at"] as? NSNumber)?.doubleValue {
+                            let seconds = max(0, resetAt - now.timeIntervalSince1970)
+                            resetInMinutes = UInt32(min(Double(UInt32.max), ceil(seconds / 60)))
+                        } else {
+                            resetInMinutes = nil
+                        }
                         if let weekly = limits["secondary"] as? [String: Any],
                            let weeklyValue = weekly["used_percent"] as? Double {
                             weekUsed = min(100, max(0, Int(weeklyValue.rounded())))
@@ -89,7 +97,10 @@ enum CodexMetricsReader {
                     }
             }
         }
-        return CodexMetrics(usedPercent: used, weekUsedPercent: weekUsed, totalTokens: UInt32(min(tokens, UInt64(UInt32.max))), updatedAt: UInt32(Date().timeIntervalSince1970))
+        return CodexMetrics(usedPercent: used, weekUsedPercent: weekUsed,
+                            totalTokens: UInt32(min(tokens, UInt64(UInt32.max))),
+                            resetInMinutes: resetInMinutes,
+                            updatedAt: UInt32(Date().timeIntervalSince1970))
     }
 }
 
@@ -158,6 +169,9 @@ final class ProspectorSerialBridge {
         let body = Proto.field(1, value: UInt64(metrics.usedPercent ?? 0))
             + Proto.field(2, value: UInt64(metrics.totalTokens))
             + Proto.field(3, value: UInt64(metrics.updatedAt))
+            + Proto.field(4, value: UInt64(metrics.resetInMinutes ?? 0))
+            // 255 is the firmware's explicit "weekly quota unavailable" marker.
+            + Proto.field(5, value: UInt64(metrics.weekUsedPercent ?? 255))
         // CallRequest.payload is the custom Request message itself. Its first
         // field is UpdateRequest, so body needs exactly one enclosing field.
         let payload = Proto.field(1, bytes: body)
