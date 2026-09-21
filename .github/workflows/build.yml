@@ -2,7 +2,7 @@ name: Build Prospector Codex macOS
 
 on:
   push:
-    branches: [main, codex]
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
