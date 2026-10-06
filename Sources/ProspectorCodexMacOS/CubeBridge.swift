@@ -15,6 +15,7 @@ final class CubeBridge {
     static let shared = CubeBridge()
     private var serial: CubeSerialPort?
     private var connectedPath: String?
+    func disconnect() { serial = nil; connectedPath = nil }
 
     func sync(_ metrics: CodexMetrics) throws -> String {
         let settings = UserDefaults.standard
@@ -40,7 +41,7 @@ final class CubeBridge {
                 serial = nil; connectedPath = nil
                 failures.append("USB: \(error.localizedDescription)")
             }
-        }
+        } else { disconnect() }
         if settings.bool(forKey: "cube.wifiEnabled") {
             do {
                 try sendWiFi(frame, host: settings.string(forKey: "cube.wifiHost") ?? "",

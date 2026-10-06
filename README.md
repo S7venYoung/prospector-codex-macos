@@ -7,6 +7,7 @@ Native macOS 13+ menu bar companion. Cube firmware now uses USB UART at **115200
 1. Install the matching Cube Codex dashboard firmware. Connect the board's USB-to-UART port; native USB is unavailable because GPIO20 controls its backlight.
 2. Open settings, select **Cube Codex 双通道**, enable USB and click **立即同步**. Specify `/dev/cu.…` if automatic discovery selects no device.
 3. Successful USB sync saves the board's IP and random pairing token. Enable Wi-Fi, keep Cube and Mac on the same trusted LAN. If DHCP changes its IP, reconnect USB or update the IP manually.
+   Allow the app's local-network permission if macOS prompts. For webpage flashing, **quit this app first** to release its serial port; disabling USB also releases the port after the next sync.
 4. Both enabled channels send data every 15/30/60 seconds. Close the settings window; the menu bar app continues syncing. Quit the app to stop.
 
 USB has a 75-second data lease; when packets stop, a fresh Wi-Fi sample takes over. Samples expire after 120 seconds. Wi-Fi is HTTP on port 8765, authenticated with `X-Cube-Token`; it is **not encrypted** and must not be exposed to the internet. Only quota/token metrics are sent, never login credentials or conversation content. Pairing tokens are saved in local app preferences.

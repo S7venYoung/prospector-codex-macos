@@ -45,9 +45,13 @@ jobs:
           <key>CFBundleShortVersionString</key><string>0.1.0</string>
           <key>CFBundleVersion</key><string>${GITHUB_RUN_NUMBER}</string>
           <key>LSMinimumSystemVersion</key><string>13.0</string>
+          <key>NSLocalNetworkUsageDescription</key><string>将 Codex 额度和 Token 统计同步到同一局域网的 Cube 屏幕。</string>
+          <key>NSAppTransportSecurity</key>
+          <dict><key>NSAllowsLocalNetworking</key><true/></dict>
           </dict>
           </plist>
           PLIST
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GITHUB_RUN_NUMBER" "$app/Contents/Info.plist"
           codesign --deep --force --verify --verbose --sign - "$app"
           mkdir -p artifact
           hdiutil create -volname "Prospector" -srcfolder "$app" -ov -format UDZO "artifact/Prospector.dmg"

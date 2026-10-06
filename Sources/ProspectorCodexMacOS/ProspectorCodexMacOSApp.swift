@@ -163,7 +163,7 @@ final class SyncModel: ObservableObject {
         configuredInterval = normalizedSeconds
         syncNow()
         timer = Timer.scheduledTimer(withTimeInterval: TimeInterval(normalizedSeconds), repeats: true) { [weak self] _ in
-            self?.syncNow()
+            Task { @MainActor in self?.syncNow() }
         }
     }
 
@@ -185,6 +185,7 @@ final class SyncModel: ObservableObject {
                 if cube {
                     connection = try CubeBridge.shared.sync(metrics)
                 } else {
+                    CubeBridge.shared.disconnect()
                     try ProspectorSerialBridge().connectAndSync(metrics, hostStatus: HostStatusReader.read())
                     connection = "Prospector"
                 }
