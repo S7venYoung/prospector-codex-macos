@@ -20,6 +20,9 @@ jobs:
       - name: Build
         run: swift build -c release
 
+      - name: Test metrics and Cube protocol
+        run: swift test
+
       - name: Package macOS application
         run: |
           app="Prospector.app"

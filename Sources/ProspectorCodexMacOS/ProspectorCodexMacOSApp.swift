@@ -2,10 +2,16 @@ import SwiftUI
 import AppKit
 
 @main
+@MainActor
 struct ProspectorMacOSApp: App {
     @Environment(\.openWindow) private var openWindow
 
-    init() { NSApplication.shared.setActivationPolicy(.accessory) }
+    init() {
+        NSApplication.shared.setActivationPolicy(.accessory)
+        let defaults = UserDefaults.standard
+        SyncModel.shared.configure(enabled: defaults.object(forKey: "prospector.autoSync") == nil || defaults.bool(forKey: "prospector.autoSync"),
+                                   seconds: defaults.integer(forKey: "cube.syncSeconds") == 0 ? 30 : defaults.integer(forKey: "cube.syncSeconds"))
+    }
 
     var body: some Scene {
         MenuBarExtra("Prospector", systemImage: "display") {
@@ -52,23 +58,44 @@ struct ProspectorSettingsView: View {
 }
 
 struct SyncSettingsView: View {
-    @StateObject private var model = SyncModel()
+    @ObservedObject private var model = SyncModel.shared
     @AppStorage("prospector.autoSync") private var enabled = true
-    @AppStorage("prospector.syncMinutes") private var interval = 5
+    @AppStorage("cube.syncSeconds") private var interval = 30
+    @AppStorage("cube.target") private var target = "cube"
+    @AppStorage("cube.usbEnabled") private var usb = true
+    @AppStorage("cube.wifiEnabled") private var wifi = false
+    @AppStorage("cube.serialPath") private var serialPath = ""
+    @AppStorage("cube.wifiHost") private var host = ""
+    @AppStorage("cube.wifiToken") private var token = ""
 
     var body: some View {
         Form {
             Section("接收器同步") {
                 Toggle("启用后台同步", isOn: $enabled)
-                    .onChange(of: enabled) { model.configure(enabled: $0, minutes: interval) }
+                    .onChange(of: enabled) { model.configure(enabled: $0, seconds: interval) }
                 Picker("同步间隔", selection: $interval) {
-                    Text("每 1 分钟").tag(1)
-                    Text("每 5 分钟").tag(5)
-                    Text("每 15 分钟").tag(15)
-                    Text("每 30 分钟").tag(30)
+                    Text("每 15 秒").tag(15)
+                    Text("每 30 秒").tag(30)
+                    Text("每 1 分钟").tag(60)
                 }
                 .disabled(!enabled)
-                .onChange(of: interval) { model.configure(enabled: enabled, minutes: $0) }
+                .onChange(of: interval) { model.configure(enabled: enabled, seconds: $0) }
+            }
+
+            Section("连接") {
+                Picker("设备类型", selection: $target) {
+                    Text("Cube Codex 双通道").tag("cube")
+                    Text("原 Prospector / ZMK Studio").tag("prospector")
+                }
+                if target == "cube" {
+                    Toggle("USB 同步（优先）", isOn: $usb)
+                    TextField("串口路径（留空自动识别）", text: $serialPath)
+                    Toggle("Wi-Fi 同步", isOn: $wifi)
+                    TextField("Cube IPv4 地址", text: $host)
+                    SecureField("配对码（USB 同步后自动保存）", text: $token)
+                    Text("先用 USB 同步一次，再启用 Wi-Fi。两通道同时发送；USB 优先租约为 75 秒。局域网 HTTP 不加密，请勿开放公网。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
 
             Section("状态") {
@@ -80,8 +107,7 @@ struct SyncSettingsView: View {
         .formStyle(.grouped)
         .padding(22)
         .navigationTitle("同步")
-        .onAppear { model.configure(enabled: enabled, minutes: interval) }
-        .onDisappear { model.stop() }
+        .onAppear { model.configure(enabled: enabled, seconds: interval) }
     }
 }
 
@@ -120,21 +146,23 @@ struct EnvironmentSettingsView: View {
 
 @MainActor
 final class SyncModel: ObservableObject {
+    static let shared = SyncModel()
+    private let queue = DispatchQueue(label: "dev.s7venyoung.cube-sync", qos: .utility)
     @Published var status = "未连接"
     @Published var syncing = false
     private var timer: Timer?
     private var configuredInterval: Int?
 
-    func configure(enabled: Bool, minutes: Int) {
-        let normalizedMinutes = max(1, minutes)
-        if enabled, configuredInterval == normalizedMinutes, timer != nil {
+    func configure(enabled: Bool, seconds: Int) {
+        let normalizedSeconds = min(60, max(15, seconds))
+        if enabled, configuredInterval == normalizedSeconds, timer != nil {
             return
         }
         stop()
         guard enabled else { status = "后台同步已关闭"; return }
-        configuredInterval = normalizedMinutes
+        configuredInterval = normalizedSeconds
         syncNow()
-        timer = Timer.scheduledTimer(withTimeInterval: TimeInterval(normalizedMinutes * 60), repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: TimeInterval(normalizedSeconds), repeats: true) { [weak self] _ in
             self?.syncNow()
         }
     }
@@ -149,13 +177,19 @@ final class SyncModel: ObservableObject {
         guard !syncing else { return }
         syncing = true
         status = "正在同步…"
-        DispatchQueue.global(qos: .utility).async {
+        let cube = UserDefaults.standard.string(forKey: "cube.target") != "prospector"
+        queue.async {
             let metrics = CodexMetricsReader.read()
-            let hostStatus = HostStatusReader.read()
             do {
-                try ProspectorSerialBridge().connectAndSync(metrics, hostStatus: hostStatus)
+                let connection: String
+                if cube {
+                    connection = try CubeBridge.shared.sync(metrics)
+                } else {
+                    try ProspectorSerialBridge().connectAndSync(metrics, hostStatus: HostStatusReader.read())
+                    connection = "Prospector"
+                }
                 DispatchQueue.main.async {
-                    self.status = "已同步 · \(Date.now.formatted(date: .omitted, time: .shortened))"
+                    self.status = "\(connection) · \(Date.now.formatted(date: .omitted, time: .shortened))"
                     self.syncing = false
                 }
             } catch {

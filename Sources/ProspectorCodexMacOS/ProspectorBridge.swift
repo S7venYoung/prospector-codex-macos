@@ -8,9 +8,10 @@ private let iosSerialSpeed: UInt = 0x8008_5402
 struct CodexMetrics {
     let usedPercent: Int?
     let weekUsedPercent: Int?
-    let totalTokens: UInt32
+    let totalTokens: UInt32?
     let resetInMinutes: UInt32?
     let updatedAt: UInt32
+    var quotaAgeSeconds: UInt32 = 86_400
 }
 
 enum BridgeError: LocalizedError {
@@ -30,16 +31,16 @@ enum BridgeError: LocalizedError {
 }
 
 enum CodexMetricsReader {
-    static func read() -> CodexMetrics {
-        let now = Date()
+    static func read(root: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/sessions"), now: Date = Date()) -> CodexMetrics {
         let calendar = Calendar.current
         let midnight = calendar.startOfDay(for: now)
-        let root = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/sessions")
         var tokens: UInt64 = 0
+        var hasTokenSample = false
         var newest = Date.distantPast
         var used: Int?
         var weekUsed: Int?
         var resetInMinutes: UInt32?
+        var latestResetAt: Double?
         let timestampFormatter = ISO8601DateFormatter()
         // Codex writes timestamps such as 2026-09-15T09:27:22.481Z.
         // ISO8601DateFormatter does not accept fractional seconds unless this
@@ -58,11 +59,14 @@ enum CodexMetricsReader {
             for line in text.split(separator: "\n") {
                     guard let json = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
                           let payload = json["payload"] as? [String: Any] else { continue }
-                    let timestamp = (json["timestamp"] as? String).flatMap(timestampFormatter.date(from:))
+                    let timestamp = (json["timestamp"] as? String).flatMap { text in
+                        timestampFormatter.date(from: text) ?? ISO8601DateFormatter().date(from: text)
+                    }
                     if payload["type"] as? String == "token_count",
                        let info = payload["info"] as? [String: Any],
                        let usage = info["total_token_usage"] as? [String: Any],
                        let total = (usage["total_tokens"] as? NSNumber)?.uint64Value {
+                        hasTokenSample = true
                         // total_token_usage is cumulative for a session. Only
                         // add its increase since the preceding event, never the
                         // whole cumulative value again.
@@ -83,6 +87,7 @@ enum CodexMetricsReader {
                         newest = timestamp
                         used = min(100, max(0, Int(value.rounded())))
                         if let resetAt = (primary["resets_at"] as? NSNumber)?.doubleValue {
+                            latestResetAt = resetAt
                             // The OLED shows the next window's local clock time
                             // (for example 20:06), not a remaining-duration timer.
                             let components = calendar.dateComponents([.hour, .minute],
@@ -93,6 +98,7 @@ enum CodexMetricsReader {
                                 resetInMinutes = nil
                             }
                         } else {
+                            latestResetAt = nil
                             resetInMinutes = nil
                         }
                         if let weekly = limits["secondary"] as? [String: Any],
@@ -104,10 +110,14 @@ enum CodexMetricsReader {
                     }
             }
         }
+        let age = max(0, now.timeIntervalSince(newest))
+        if age > 900 { used = nil; weekUsed = nil }
+        if let reset = latestResetAt, reset <= now.timeIntervalSince1970 { used = nil }
         return CodexMetrics(usedPercent: used, weekUsedPercent: weekUsed,
-                            totalTokens: UInt32(min(tokens, UInt64(UInt32.max))),
+                            totalTokens: hasTokenSample ? UInt32(min(tokens, UInt64(UInt32.max))) : nil,
                             resetInMinutes: resetInMinutes,
-                            updatedAt: UInt32(Date().timeIntervalSince1970))
+                            updatedAt: UInt32(now.timeIntervalSince1970),
+                            quotaAgeSeconds: UInt32(min(86_400, age)))
     }
 }
 
@@ -128,8 +138,11 @@ final class ProspectorSerialBridge {
         // than ZMK Studio RPC. Probe it first; regular dongle firmware ignores
         // this PING and continues with the existing Studio flow.
         if try serial.isScanner() {
-            let left = max(0, min(100, 100 - (metrics.usedPercent ?? 0)))
-            var frame = "CODEX \(left) \(metrics.totalTokens)"
+            guard let used = metrics.usedPercent, let tokens = metrics.totalTokens else {
+                throw BridgeError.serial("旧扫描仪协议无法表示未知额度，请升级 Cube 固件")
+            }
+            let left = max(0, min(100, 100 - used))
+            var frame = "CODEX \(left) \(tokens)"
             if let weeklyUsed = metrics.weekUsedPercent {
                 frame += " \(max(0, min(100, 100 - weeklyUsed)))"
             }
@@ -173,8 +186,11 @@ final class ProspectorSerialBridge {
     }
 
     private func requestMetrics(subsystemIndex: UInt32, metrics: CodexMetrics) throws {
+        guard metrics.usedPercent != nil else {
+            throw BridgeError.serial("Codex 额度不可用或已超过 15 分钟；未发送虚假的 100% 额度")
+        }
         let body = Proto.field(1, value: UInt64(metrics.usedPercent ?? 0))
-            + Proto.field(2, value: UInt64(metrics.totalTokens))
+            + Proto.field(2, value: UInt64(metrics.totalTokens ?? 0))
             + Proto.field(3, value: UInt64(metrics.updatedAt))
             + Proto.field(4, value: UInt64(metrics.resetInMinutes ?? 0))
             // 255 is the firmware's explicit "weekly quota unavailable" marker.
