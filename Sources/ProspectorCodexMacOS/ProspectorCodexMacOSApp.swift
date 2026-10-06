@@ -163,7 +163,8 @@ final class SyncModel: ObservableObject {
         configuredInterval = normalizedSeconds
         syncNow()
         timer = Timer.scheduledTimer(withTimeInterval: TimeInterval(normalizedSeconds), repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.syncNow() }
+            guard let model = self else { return }
+            Task { @MainActor [model] in model.syncNow() }
         }
     }
 
