@@ -22,6 +22,8 @@ USB has a 75-second data lease; when packets stop, a fresh Wi-Fi sample takes ov
 
 ## Data semantics
 
+Metrics are cached in memory and read incrementally by file identity and byte offset. Unchanged files are not reread; old unmodified logs are skipped. Each cycle processes at most 8 MiB with a 0.4-second processing budget, then proceeds to device sync. Initial catch-up may take several cycles; incomplete daily totals remain unavailable rather than being presented as final totals. Truncation, replacement, deletion, partial JSONL writes and midnight rollover are handled. Only metric summaries and a bounded incomplete line are retained, not conversations. Clearing local session logs removes the source of historical totals, not account quota; new logged activity repopulates the display.
+
 Local `~/.codex/sessions` JSONL files supply used percentages and cumulative token counts. The display shows `100 - used`, with today's token increments summed once per session. Quota samples older than 15 minutes or a passed primary reset time are unavailable; unknown values remain `--`, never fabricated 100%. Transport connectivity does not guarantee a fresh Codex quota sample. Desktop/chat activity not recorded in these local logs cannot be included. Keyboard layer/WPM/L/R battery remain unavailable until real ZMK telemetry is implemented.
 
 Protocol: `CAPS` -> `CUBE-CODEX/2`; `PAIR` -> `CUBE-PAIR <IPv4> <32-hex-token>`; `CODEX2 <5h-left|-1> <week-left|-1> <today-tokens|-1> <quota-age-seconds> <ttl-seconds>` -> `OK`. Wi-Fi POST `/v1/codex` accepts the same frame. `-1` means unavailable. Compatibility `PING` and legacy `CODEX` remain supported on the Cube.

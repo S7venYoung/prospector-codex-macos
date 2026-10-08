@@ -31,93 +31,17 @@ enum BridgeError: LocalizedError {
 }
 
 enum CodexMetricsReader {
+    private static let lock = NSLock()
+    private static var reader: IncrementalMetricsReader?
+    private static var cachedRoot: URL?
     static func read(root: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/sessions"), now: Date = Date()) -> CodexMetrics {
-        let calendar = Calendar.current
-        let midnight = calendar.startOfDay(for: now)
-        var tokens: UInt64 = 0
-        var hasTokenSample = false
-        var newest = Date.distantPast
-        var used: Int?
-        var weekUsed: Int?
-        var resetInMinutes: UInt32?
-        var latestResetAt: Double?
-        let timestampFormatter = ISO8601DateFormatter()
-        // Codex writes timestamps such as 2026-09-15T09:27:22.481Z.
-        // ISO8601DateFormatter does not accept fractional seconds unless this
-        // option is set, which previously made every sample look unavailable.
-        timestampFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-
-        // A session can span midnight and remains in the directory in which it
-        // began. Directory names therefore cannot be used as the data date.
-        let files = (FileManager.default.enumerator(at: root,
-                                                    includingPropertiesForKeys: [.isRegularFileKey])?
-            .compactMap { $0 as? URL }
-            .filter { $0.pathExtension == "jsonl" }) ?? []
-        for file in files {
-            guard let text = try? String(contentsOf: file, encoding: .utf8) else { continue }
-            var previousTotal: UInt64?
-            for line in text.split(separator: "\n") {
-                    guard let json = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
-                          let payload = json["payload"] as? [String: Any] else { continue }
-                    let timestamp = (json["timestamp"] as? String).flatMap { text in
-                        timestampFormatter.date(from: text) ?? ISO8601DateFormatter().date(from: text)
-                    }
-                    if payload["type"] as? String == "token_count",
-                       let info = payload["info"] as? [String: Any],
-                       let usage = info["total_token_usage"] as? [String: Any],
-                       let total = (usage["total_tokens"] as? NSNumber)?.uint64Value {
-                        hasTokenSample = true
-                        // total_token_usage is cumulative for a session. Only
-                        // add its increase since the preceding event, never the
-                        // whole cumulative value again.
-                        if let timestamp, timestamp >= midnight {
-                            if let previousTotal, total >= previousTotal {
-                                tokens += total - previousTotal
-                            } else if let last = info["last_token_usage"] as? [String: Any],
-                                      let initial = (last["total_tokens"] as? NSNumber)?.uint64Value {
-                                // First post-midnight sample of a new/unknown file.
-                                tokens += initial
-                            }
-                        }
-                        previousTotal = total
-                    }
-                    if let timestamp, timestamp > newest,
-                       let limits = payload["rate_limits"] as? [String: Any],
-                       let primary = limits["primary"] as? [String: Any], let value = primary["used_percent"] as? Double {
-                        newest = timestamp
-                        used = min(100, max(0, Int(value.rounded())))
-                        if let resetAt = (primary["resets_at"] as? NSNumber)?.doubleValue {
-                            latestResetAt = resetAt
-                            // The OLED shows the next window's local clock time
-                            // (for example 20:06), not a remaining-duration timer.
-                            let components = calendar.dateComponents([.hour, .minute],
-                                                                     from: Date(timeIntervalSince1970: resetAt))
-                            if let hour = components.hour, let minute = components.minute {
-                                resetInMinutes = UInt32(hour * 60 + minute)
-                            } else {
-                                resetInMinutes = nil
-                            }
-                        } else {
-                            latestResetAt = nil
-                            resetInMinutes = nil
-                        }
-                        if let weekly = limits["secondary"] as? [String: Any],
-                           let weeklyValue = weekly["used_percent"] as? Double {
-                            weekUsed = min(100, max(0, Int(weeklyValue.rounded())))
-                        } else {
-                            weekUsed = nil
-                        }
-                    }
-            }
+        lock.lock()
+        defer { lock.unlock() }
+        if cachedRoot != root || reader == nil {
+            reader = IncrementalMetricsReader(root: root)
+            cachedRoot = root
         }
-        let age = max(0, now.timeIntervalSince(newest))
-        if age > 900 { used = nil; weekUsed = nil }
-        if let reset = latestResetAt, reset <= now.timeIntervalSince1970 { used = nil }
-        return CodexMetrics(usedPercent: used, weekUsedPercent: weekUsed,
-                            totalTokens: hasTokenSample ? UInt32(min(tokens, UInt64(UInt32.max))) : nil,
-                            resetInMinutes: resetInMinutes,
-                            updatedAt: UInt32(now.timeIntervalSince1970),
-                            quotaAgeSeconds: UInt32(min(86_400, age)))
+        return reader!.read(now: now)
     }
 }
 
