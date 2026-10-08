@@ -15,16 +15,18 @@ final class CubeBridge {
     static let shared = CubeBridge()
     private var serial: CubeSerialPort?
     private var connectedPath: String?
+    private var lastIdentifiedPath: String?
+    var identifiedSerialPath: String? { connectedPath ?? lastIdentifiedPath }
     func disconnect() { serial = nil; connectedPath = nil }
 
-    func sync(_ metrics: CodexMetrics) throws -> String {
+    func sync(_ metrics: CodexMetrics, excludingPaths: Set<String> = []) throws -> String {
         let settings = UserDefaults.standard
         let frame = CubeProtocol.frame(metrics)
         var successes: [String] = []
         var failures: [String] = []
         if settings.object(forKey: "cube.usbEnabled") == nil || settings.bool(forKey: "cube.usbEnabled") {
             do {
-                let port = try usbPort()
+                let port = try usbPort(excludingPaths: excludingPaths)
                 try port.write(frame)
                 _ = try port.waitLine(timeout: 3) { $0 == "OK" }
                 successes.append("USB")
@@ -56,26 +58,21 @@ final class CubeBridge {
         return successes.joined(separator: " + ") + warning
     }
 
-    private func usbPort() throws -> CubeSerialPort {
+    private func usbPort(excludingPaths: Set<String>) throws -> CubeSerialPort {
         let selected = (UserDefaults.standard.string(forKey: "cube.serialPath") ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if let serial, selected.isEmpty || selected == connectedPath { return serial }
+        if let serial, let connectedPath, !excludingPaths.contains(connectedPath),
+           selected.isEmpty || selected == connectedPath { return serial }
         serial = nil; connectedPath = nil
-        let candidates: [String]
-        if !selected.isEmpty {
-            guard selected.hasPrefix("/dev/cu.") else { throw BridgeError.serial("串口路径必须以 /dev/cu. 开头") }
-            candidates = [selected]
-        } else {
-            candidates = ((try? FileManager.default.contentsOfDirectory(atPath: "/dev")) ?? [])
-                .filter { $0.hasPrefix("cu.") && ($0.lowercased().contains("usbserial") || $0.lowercased().contains("usbmodem") || $0.lowercased().contains("wchusb")) }
-                .sorted().map { "/dev/" + $0 }
-        }
+        let candidates = try SerialDeviceRouting.candidates(for: .cube, selected: selected,
+            available: SerialDeviceRouting.availablePorts(), excluding: excludingPaths)
         for path in candidates {
             do {
                 let port = try CubeSerialPort(path: path)
                 // Only probe; no data is written to a device before it identifies.
                 try port.write("CAPS\n")
                 _ = try port.waitLine(timeout: 2) { $0 == "CUBE-CODEX/2" }
+                lastIdentifiedPath = path
                 serial = port; connectedPath = path
                 return port
             } catch { continue }

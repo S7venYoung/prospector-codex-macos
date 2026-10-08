@@ -24,10 +24,10 @@ struct ProspectorMacOSApp: App {
         }
 
         Window("Prospector", id: "settings") {
-            ProspectorSettingsView().frame(width: 680, height: 470)
+            ProspectorSettingsView().frame(width: 720, height: 640)
         }
         .defaultPosition(.center)
-        .defaultSize(width: 680, height: 470)
+        .defaultSize(width: 720, height: 640)
         .windowResizability(.contentSize)
     }
 }
@@ -61,7 +61,9 @@ struct SyncSettingsView: View {
     @ObservedObject private var model = SyncModel.shared
     @AppStorage("prospector.autoSync") private var enabled = true
     @AppStorage("cube.syncSeconds") private var interval = 30
-    @AppStorage("cube.target") private var target = "cube"
+    @AppStorage("cube.deviceEnabled") private var cubeEnabled = true
+    @AppStorage("prospector.deviceEnabled") private var prospectorEnabled = true
+    @AppStorage("prospector.serialPath") private var prospectorPath = ""
     @AppStorage("cube.usbEnabled") private var usb = true
     @AppStorage("cube.wifiEnabled") private var wifi = false
     @AppStorage("cube.serialPath") private var serialPath = ""
@@ -82,12 +84,9 @@ struct SyncSettingsView: View {
                 .onChange(of: interval) { model.configure(enabled: enabled, seconds: $0) }
             }
 
-            Section("连接") {
-                Picker("设备类型", selection: $target) {
-                    Text("Cube Codex 双通道").tag("cube")
-                    Text("原 Prospector / ZMK Studio").tag("prospector")
-                }
-                if target == "cube" {
+            Section("小智 Cube · USB / Wi-Fi") {
+                Toggle("同步小智 Cube", isOn: $cubeEnabled)
+                if cubeEnabled {
                     Toggle("USB 同步（优先）", isOn: $usb)
                     TextField("串口路径（留空自动识别）", text: $serialPath)
                     Toggle("Wi-Fi 同步", isOn: $wifi)
@@ -98,8 +97,19 @@ struct SyncSettingsView: View {
                 }
             }
 
+            Section("扫描仪 · Prospector / ZMK") {
+                Toggle("同步扫描仪", isOn: $prospectorEnabled)
+                if prospectorEnabled {
+                    TextField("扫描仪串口（留空自动识别）", text: $prospectorPath)
+                    Text("可以与小智 Cube 同时启用。两个 USB 设备必须选择不同串口；扫描仪使用 12500，Cube 使用 115200。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+
             Section("状态") {
-                LabeledContent("接收器", value: model.status)
+                LabeledContent("小智 Cube", value: model.cubeStatus)
+                LabeledContent("扫描仪", value: model.prospectorStatus)
+                Text(model.status).font(.caption).foregroundStyle(.secondary)
                 Button(model.syncing ? "正在同步…" : "立即同步") { model.syncNow() }
                     .disabled(model.syncing)
             }
@@ -149,6 +159,8 @@ final class SyncModel: ObservableObject {
     static let shared = SyncModel()
     private let queue = DispatchQueue(label: "dev.s7venyoung.cube-sync", qos: .utility)
     @Published var status = "未连接"
+    @Published var cubeStatus = "等待同步"
+    @Published var prospectorStatus = "等待同步"
     @Published var syncing = false
     private var timer: Timer?
     private var configuredInterval: Int?
@@ -178,24 +190,42 @@ final class SyncModel: ObservableObject {
         guard !syncing else { return }
         syncing = true
         status = "正在同步…"
-        let cube = UserDefaults.standard.string(forKey: "cube.target") != "prospector"
+        let settings = UserDefaults.standard
+        let cubeEnabled = settings.object(forKey: "cube.deviceEnabled") == nil || settings.bool(forKey: "cube.deviceEnabled")
+        let prospectorEnabled = settings.object(forKey: "prospector.deviceEnabled") == nil || settings.bool(forKey: "prospector.deviceEnabled")
+        let prospectorPath = (settings.string(forKey: "prospector.serialPath") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let cubePath = (settings.string(forKey: "cube.serialPath") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        cubeStatus = cubeEnabled ? "正在同步…" : "已停用"
+        prospectorStatus = prospectorEnabled ? "正在同步…" : "已停用"
         queue.async {
             let metrics = CodexMetricsReader.read()
-            do {
-                let connection: String
-                if cube {
-                    connection = try CubeBridge.shared.sync(metrics)
-                } else {
-                    CubeBridge.shared.disconnect()
-                    try ProspectorSerialBridge().connectAndSync(metrics, hostStatus: HostStatusReader.read())
-                    connection = "Prospector"
+            if !cubeEnabled { CubeBridge.shared.disconnect() }
+            MultiDeviceSync.run(cubeEnabled: cubeEnabled, prospectorEnabled: prospectorEnabled, cube: {
+                let excluded: Set<String> = prospectorEnabled && !prospectorPath.isEmpty ? [prospectorPath] : []
+                return try CubeBridge.shared.sync(metrics, excludingPaths: excluded)
+            }, prospector: {
+                var excluded = Set<String>()
+                if cubeEnabled {
+                    if !cubePath.isEmpty { excluded.insert(cubePath) }
+                    if let identified = CubeBridge.shared.identifiedSerialPath { excluded.insert(identified) }
+                }
+                try ProspectorSerialBridge().connectAndSync(metrics, hostStatus: HostStatusReader.read(),
+                    selectedPath: prospectorPath, excludingPaths: excluded)
+                return "USB"
+            }, report: { device, result in
+                let message: String
+                switch result {
+                case .success(let connection): message = "\(connection) · \(Date.now.formatted(date: .omitted, time: .shortened))"
+                case .failure(let error): message = error.localizedDescription
                 }
                 DispatchQueue.main.async {
-                    self.status = "\(connection) · \(Date.now.formatted(date: .omitted, time: .shortened))"
-                    self.syncing = false
+                    if device == .cube { self.cubeStatus = message }
+                    else { self.prospectorStatus = message }
                 }
-            } catch {
-                DispatchQueue.main.async { self.status = error.localizedDescription; self.syncing = false }
+            })
+            DispatchQueue.main.async {
+                self.status = cubeEnabled || prospectorEnabled ? "本轮同步完成，两台设备结果分别显示" : "请至少启用一台设备"
+                self.syncing = false
             }
         }
     }

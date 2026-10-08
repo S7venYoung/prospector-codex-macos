@@ -130,29 +130,58 @@ final class ProspectorSerialBridge {
     // those notifications while waiting for an RPC response.
     private var nextRequestID: UInt32 = 1
 
-    func connectAndSync(_ metrics: CodexMetrics, hostStatus: HostStatus? = nil) throws {
-        let device = try receiverPath()
-        let serial = try SerialPort(path: device)
-        port = serial
-        // Scanner firmware uses a small newline-delimited CDC protocol rather
-        // than ZMK Studio RPC. Probe it first; regular dongle firmware ignores
-        // this PING and continues with the existing Studio flow.
-        if try serial.isScanner() {
-            guard let used = metrics.usedPercent, let tokens = metrics.totalTokens else {
-                throw BridgeError.serial("旧扫描仪协议无法表示未知额度，请升级 Cube 固件")
+    func connectAndSync(_ metrics: CodexMetrics, hostStatus: HostStatus? = nil,
+                        selectedPath: String = "", excludingPaths: Set<String> = []) throws {
+        let candidates = try SerialDeviceRouting.candidates(for: .prospector, selected: selectedPath,
+            available: SerialDeviceRouting.availablePorts(), excluding: excludingPaths)
+        var lastError: Error = BridgeError.noReceiver
+        defer { port = nil }
+        for device in candidates {
+            var identified = false
+            do {
+                let serial = try SerialPort(path: device)
+                port = serial
+                if try serial.isScanner() {
+                    identified = true
+                    try syncScanner(serial, metrics: metrics)
+                    return
+                }
+                let list = try requestList()
+                guard list[subsystemIdentifier] != nil || list[hostStatusSubsystemIdentifier] != nil else {
+                    throw BridgeError.subsystemMissing
+                }
+                identified = true
+                try syncStudio(metrics, hostStatus: hostStatus, list: list)
+                return
+            } catch {
+                port = nil
+                // Once identified, data errors must not redirect to another device.
+                if identified || !selectedPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    throw error
+                }
+                lastError = error
             }
-            let left = max(0, min(100, 100 - used))
-            var frame = "CODEX \(left) \(tokens)"
-            if let weeklyUsed = metrics.weekUsedPercent {
-                frame += " \(max(0, min(100, 100 - weeklyUsed)))"
-            }
-            try serial.writeText(frame + "\n")
-            guard try serial.readTextLine(timeout: 2).trimmingCharacters(in: .whitespacesAndNewlines) == "OK" else {
-                throw BridgeError.serial("Scanner did not confirm Codex data")
-            }
-            return
         }
-        let list = try requestList()
+        throw lastError
+    }
+
+    private func syncScanner(_ serial: SerialPort, metrics: CodexMetrics) throws {
+        // Legacy scanner text protocol is separate from Studio RPC and CODEX2.
+        guard let used = metrics.usedPercent, let tokens = metrics.totalTokens else {
+            throw BridgeError.serial("扫描仪当前协议无法表示未知额度，请等待额度更新或升级扫描仪固件")
+        }
+        let left = max(0, min(100, 100 - used))
+        var frame = "CODEX \(left) \(tokens)"
+        if let weeklyUsed = metrics.weekUsedPercent {
+            frame += " \(max(0, min(100, 100 - weeklyUsed)))"
+        }
+        try serial.writeText(frame + "\n")
+        guard try serial.readTextLine(timeout: 2).trimmingCharacters(in: .whitespacesAndNewlines) == "OK" else {
+            throw BridgeError.serial("Scanner did not confirm Codex data")
+        }
+    }
+
+    private func syncStudio(_ metrics: CodexMetrics, hostStatus: HostStatus?, list: [String: UInt32]) throws {
         var sent = false
         // A receiver-only weather theme intentionally omits the Codex metrics
         // endpoint. Do not let that prevent its independent clock/weather RPC.
@@ -165,18 +194,6 @@ final class ProspectorSerialBridge {
             sent = true
         }
         guard sent else { throw BridgeError.subsystemMissing }
-    }
-
-    private func receiverPath() throws -> String {
-        let paths = (try? FileManager.default.contentsOfDirectory(atPath: "/dev")) ?? []
-        let candidates = paths.filter { $0.hasPrefix("cu.") && ($0.localizedCaseInsensitiveContains("usbmodem") || $0.localizedCaseInsensitiveContains("usbserial")) }
-        // DYA identifies this receiver as usbmodem11304. Prefer it when both
-        // the receiver and another USB CDC device are attached.
-        let receiver = candidates.first { $0.localizedCaseInsensitiveContains("usbmodem11304") }
-            ?? candidates.first { $0.localizedCaseInsensitiveContains("prospector") }
-            ?? candidates.sorted().last
-        guard let receiver else { throw BridgeError.noReceiver }
-        return "/dev/" + receiver
     }
 
     private func requestList() throws -> [String: UInt32] {
