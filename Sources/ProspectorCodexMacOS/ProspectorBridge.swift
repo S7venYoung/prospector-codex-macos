@@ -90,16 +90,8 @@ final class ProspectorSerialBridge {
     }
 
     private func syncScanner(_ serial: SerialPort, metrics: CodexMetrics) throws {
-        // Legacy scanner text protocol is separate from Studio RPC and CODEX2.
-        guard let used = metrics.usedPercent, let tokens = metrics.totalTokens else {
-            throw BridgeError.serial("扫描仪当前协议无法表示未知额度，请等待额度更新或升级扫描仪固件")
-        }
-        let left = max(0, min(100, 100 - used))
-        var frame = "CODEX \(left) \(tokens)"
-        if let weeklyUsed = metrics.weekUsedPercent {
-            frame += " \(max(0, min(100, 100 - weeklyUsed)))"
-        }
-        try serial.writeText(frame + "\n")
+        // Scanner v2 can update each field independently, including unknowns.
+        try serial.writeText(ScannerProtocol.frame(metrics, version: serial.scannerProtocolVersion))
         guard try serial.readTextLine(timeout: 2).trimmingCharacters(in: .whitespacesAndNewlines) == "OK" else {
             throw BridgeError.serial("Scanner did not confirm Codex data")
         }
@@ -178,6 +170,7 @@ final class ProspectorSerialBridge {
 }
 
 private final class SerialPort {
+    private(set) var scannerProtocolVersion = 1
     private let fd: Int32
     private var frame: [UInt8] = []
     private var started = false
@@ -224,7 +217,8 @@ private final class SerialPort {
             // framed Studio RPC path below.
             if let line = try? readTextLine(timeout: 0.2)
                 .trimmingCharacters(in: .whitespacesAndNewlines),
-               line == "PROSPECTOR-SCANNER/1" {
+               line == "PROSPECTOR-SCANNER/1" || line == "PROSPECTOR-SCANNER/2" {
+                scannerProtocolVersion = line.hasSuffix("/2") ? 2 : 1
                 return true
             }
         }
