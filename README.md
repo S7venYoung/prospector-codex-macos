@@ -39,7 +39,7 @@ GitHub Actions packages `Prospector.dmg`. The app is ad-hoc signed, not Apple no
 
 沿用现有 Prospector USB Studio 连接，识别接收器的 `velvet_display` 和 `cormoran_custom_settings` 子系统后，把 Codex 与 Mac 系统数据写入 `host_metrics`（MEMORY 模式，不刷写 Flash）。接收器将数据转发至左右键盘，不影响原扫描仪/Cube 协议。
 
-左手默认 Codex 5 小时/7 天剩余额度及重置倒计时；右手默认 CPU、RAM、CPU 温度和趋势。DYA Custom Settings 的 `velvet_display/left_theme`、`right_theme`：0=原小猫咪，1=Codex，2=系统信息，可各自保存。
+左手默认 Codex 5 小时/7 天剩余额度及重置倒计时；右手默认 CPU、RAM、CPU 温度和趋势。DYA Custom Settings 只设置 `velvet_display/theme_set`：0=左右均为原小猫咪（默认），1=左 Codex＋右系统信息（同一套主题），Persist 保存后整套保持。旧的左右独立主题设置已取消。
 
 CPU 使用 Mach 计数差值，首次采样未知；RAM 为 active+wired+compressed，非 macOS 内存压力指标。CPU 温度按芯片代际选取已知 CPU SMC 键，M 系列在 SMC 不可用时回退至 CPU 专用 HID 温度传感器；读不到显示 `--°C`。不会用天气、GPU 或电池温度替代 CPU 温度。已知 CPU SMC 键可通过 `prospector.cpuTemperatureSMCKey` 自定义；未确认该键含义时不要指定。温度采集已在当前 Apple M1 通过只读探针验证，键盘端显示和发布版应用仍待构建测试。
 
@@ -53,3 +53,7 @@ CPU 使用 Mach 计数差值，首次采样未知；RAM 为 active+wired+compres
 - HID API 非公开稳定接口，通过动态符号查询调用；接口缺失、访问受限或没有 CPU 传感器时返回未知。应用不调用 sudo、不安装驱动或特权服务、不控制风扇。
 - 当前这台 Apple M1 的 SMC CPU 键返回不存在；HID 回退的只读原生探针返回约 60.9°C。此结果验证的是该机器当时的电脑端采集，不能证明所有 M 系列/macOS 版本或键盘显示均已通过。
 - 宿主传感器选择、Float32/SP78 解码、非法数值、最高值选择测试通过；XCTest 用例留待用户确认后在 Actions 执行。没有构建 macOS 安装包或触发 Actions，键盘的 18 字节协议保持不变。
+
+### 整套主题选择
+
+固件按整套主题切换，不按屏幕单独选择。猫咪套装左右都是猫咪；信息套装左 Codex、右系统和 CPU 温度。`host_metrics` 数据协议不变，此次仅更正主题说明，不需修改电脑端发送逻辑。
