@@ -41,6 +41,15 @@ GitHub Actions packages `Prospector.dmg`. The app is ad-hoc signed, not Apple no
 
 左手默认 Codex 5 小时/7 天剩余额度及重置倒计时；右手默认 CPU、RAM、CPU 温度和趋势。DYA Custom Settings 的 `velvet_display/left_theme`、`right_theme`：0=原小猫咪，1=Codex，2=系统信息，可各自保存。
 
-CPU 使用 Mach 计数差值，首次采样未知；RAM 为 active+wired+compressed，非 macOS 内存压力指标。CPU 温度通过 AppleSMC 的 CPU 专用 TC0D/TC0P 传感器读取；不同 Mac 的接口/键名可用性不同，尤其 Apple Silicon，读不到显示 `--°C`。不会用天气、GPU 或电池温度替代 CPU 温度。已知 CPU SMC 键可通过 `prospector.cpuTemperatureSMCKey` 自定义；未确认该键含义时不要指定。此温度读取尚未在用户硬件上验证。
+CPU 使用 Mach 计数差值，首次采样未知；RAM 为 active+wired+compressed，非 macOS 内存压力指标。CPU 温度按芯片代际选取已知 CPU SMC 键，M 系列在 SMC 不可用时回退至 CPU 专用 HID 温度传感器；读不到显示 `--°C`。不会用天气、GPU 或电池温度替代 CPU 温度。已知 CPU SMC 键可通过 `prospector.cpuTemperatureSMCKey` 自定义；未确认该键含义时不要指定。温度采集已在当前 Apple M1 通过只读探针验证，键盘端显示和发布版应用仍待构建测试。
 
 沿用应用现有 15–60 秒同步周期，接收器 90 秒没有新数据后显示未知；趋势记录最近 12 次电脑更新，不重复填充未更新的旧值。与 DYA 不能同时独占同一串口，改主题并保存后退出 DYA，再开启本应用同步。需要配套更新 `zmk-elashvelvet` 的 nano 分支三份固件。Actions 已改为仅手动触发，此次没有构建或发布安装包。
+
+### M 系列温度支持与验证（2026-10-19）
+
+- 自动识别 Apple M 芯片代际，只使用对应 CPU 键；未知代际不猜键，不回退 Intel 的 TC0P。键名映射参考 [Stats CPU 传感器表](https://github.com/exelban/stats/blob/master/Modules/Sensors/values.swift)。
+- SMC 无法提供数据时，M 系列回退至 IOKit HID 温度事件，仅选择 `pACC`、`eACC` 和明确命名的 CPU 传感器；排除 GPU、电池、环境和无法归属 CPU 的 PMU die 名称。
+- 屏幕的 CPU 温度定义为可用 CPU 传感器中的最高读数，并非全机平均或 GPU 温度。0、NaN、Infinity、越界和缺失数据均不伪造为有效温度。
+- HID API 非公开稳定接口，通过动态符号查询调用；接口缺失、访问受限或没有 CPU 传感器时返回未知。应用不调用 sudo、不安装驱动或特权服务、不控制风扇。
+- 当前这台 Apple M1 的 SMC CPU 键返回不存在；HID 回退的只读原生探针返回约 60.9°C。此结果验证的是该机器当时的电脑端采集，不能证明所有 M 系列/macOS 版本或键盘显示均已通过。
+- 宿主传感器选择、Float32/SP78 解码、非法数值、最高值选择测试通过；XCTest 用例留待用户确认后在 Actions 执行。没有构建 macOS 安装包或触发 Actions，键盘的 18 字节协议保持不变。

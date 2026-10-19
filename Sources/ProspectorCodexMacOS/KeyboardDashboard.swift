@@ -87,6 +87,11 @@ enum SystemMetricsReader {
 // temperature fallback, shell command, sudo, or invented temperature is used.
 enum CPUTemperatureReader {
     static func read() -> Int? {
+        if let temperature = readSMC() { return temperature }
+        guard (cpuBrand() ?? "").lowercased().hasPrefix("apple m") else { return nil }
+        return HIDCPUTemperature.read()
+    }
+    private static func readSMC() -> Int? {
         let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSMC"))
         guard service != 0 else { return nil }
         defer { IOObjectRelease(service) }
@@ -94,23 +99,26 @@ enum CPUTemperatureReader {
         guard IOServiceOpen(service, mach_task_self_, 0, &connection) == KERN_SUCCESS else { return nil }
         defer { IOServiceClose(connection) }
         let configured = UserDefaults.standard.string(forKey: "prospector.cpuTemperatureSMCKey")
-        let keys = configured.map { [$0] } ?? ["TC0D", "TC0P"]
+        let keys = configured.map { [$0] } ?? CPUTemperaturePolicy.keys(for: cpuBrand() ?? "")
+        var readings: [Int] = []
         for key in keys {
             guard key.utf8.count == 4, let info = call(connection, key: key, command: 9),
                   read32(info, 28) > 0, read32(info, 28) <= 32,
                   let bytes = call(connection, key: key, command: 5, info: info) else { continue }
-            let type = read32(info, 32)
-            let value: Double
-            if type == fourCC("sp78") {
-                value = Double(Int16(bitPattern: UInt16(bytes[48]) << 8 | UInt16(bytes[49]))) / 256
-            } else if type == fourCC("flt ") {
-                // AppleSMC flt CPU sensors return a native little-endian float.
-                value = Double(Float(bitPattern: read32(bytes, 48)))
-            } else { continue }
-            if value.isFinite, value > 0, value <= 150 { return Int((value * 10).rounded()) }
+            if let value = CPUTemperaturePolicy.decode(type: read32(info, 32), bytes: Array(bytes[48..<80])) {
+                readings.append(value)
+            }
         }
-        return nil
+        return CPUTemperaturePolicy.hottest(readings)
     }
+    private static func cpuBrand() -> String? {
+        var size = 0
+        guard sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0) == 0, size > 1, size < 1024 else { return nil }
+        var bytes = [CChar](repeating: 0, count: size)
+        guard sysctlbyname("machdep.cpu.brand_string", &bytes, &size, nil, 0) == 0 else { return nil }
+        return String(cString: bytes)
+    }
+
     private static func fourCC(_ s: String) -> UInt32 { s.utf8.reduce(0) { ($0 << 8) | UInt32($1) } }
     private static func read32(_ b: [UInt8], _ i: Int) -> UInt32 {
         UInt32(b[i]) | UInt32(b[i+1]) << 8 | UInt32(b[i+2]) << 16 | UInt32(b[i+3]) << 24
