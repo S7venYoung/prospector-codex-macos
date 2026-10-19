@@ -47,14 +47,13 @@ enum CodexMetricsReader {
 
 final class ProspectorSerialBridge {
     private let subsystemIdentifier = "s7venyoung__codex_metrics"
-    private let hostStatusSubsystemIdentifier = "s7venyoung__host_status"
     private var port: SerialPort?
     // Do not use zero: protobuf omits a zero request ID, the same shape used
     // by asynchronous Studio notifications. Starting at one lets us ignore
     // those notifications while waiting for an RPC response.
     private var nextRequestID: UInt32 = 1
 
-    func connectAndSync(_ metrics: CodexMetrics, hostStatus: HostStatus? = nil,
+    func connectAndSync(_ metrics: CodexMetrics, system: SystemMetrics? = nil,
                         selectedPath: String = "", excludingPaths: Set<String> = []) throws {
         let candidates = try SerialDeviceRouting.candidates(for: .prospector, selected: selectedPath,
             available: SerialDeviceRouting.availablePorts(), excluding: excludingPaths)
@@ -71,11 +70,11 @@ final class ProspectorSerialBridge {
                     return
                 }
                 let list = try requestList()
-                guard list[subsystemIdentifier] != nil || list[hostStatusSubsystemIdentifier] != nil || list["velvet_display"] != nil else {
+                guard list[subsystemIdentifier] != nil || list["velvet_display"] != nil else {
                     throw BridgeError.subsystemMissing
                 }
                 identified = true
-                try syncStudio(metrics, hostStatus: hostStatus, list: list)
+                try syncStudio(metrics, system: system, list: list)
                 return
             } catch {
                 port = nil
@@ -97,28 +96,22 @@ final class ProspectorSerialBridge {
         }
     }
 
-    private func syncStudio(_ metrics: CodexMetrics, hostStatus: HostStatus?, list: [String: UInt32]) throws {
+    private func syncStudio(_ metrics: CodexMetrics, system: SystemMetrics?, list: [String: UInt32]) throws {
         var sent = false
         if let namespace = list["velvet_display"], let settings = list["cormoran_custom_settings"] {
-            try requestKeyboardDashboard(settingsIndex: settings, namespaceIndex: namespace, metrics: metrics)
+            try requestKeyboardDashboard(settingsIndex: settings, namespaceIndex: namespace, metrics: metrics, system: system ?? SystemMetricsReader.read())
             sent = true
         }
-        // A receiver-only weather theme intentionally omits the Codex metrics
-        // endpoint. Do not let that prevent its independent clock/weather RPC.
         if let index = list[subsystemIdentifier] {
             try requestMetrics(subsystemIndex: index, metrics: metrics)
-            sent = true
-        }
-        if let hostStatus, let hostIndex = list[hostStatusSubsystemIdentifier] {
-            try requestHostStatus(subsystemIndex: hostIndex, status: hostStatus)
             sent = true
         }
         guard sent else { throw BridgeError.subsystemMissing }
     }
 
-    private func requestKeyboardDashboard(settingsIndex: UInt32, namespaceIndex: UInt32, metrics: CodexMetrics) throws {
+    private func requestKeyboardDashboard(settingsIndex: UInt32, namespaceIndex: UInt32, metrics: CodexMetrics, system: SystemMetrics) throws {
         let sequence = UInt8(truncatingIfNeeded: UInt64(Date().timeIntervalSince1970))
-        let data = KeyboardDashboard.payload(metrics, system: SystemMetricsReader.read(), sequence: sequence)
+        let data = KeyboardDashboard.payload(metrics, system: system, sequence: sequence)
         let reference = Proto.field(1, value: UInt64(namespaceIndex))
             + Proto.field(2, bytes: Array("host_metrics".utf8))
         let value = Proto.field(1, bytes: data)
@@ -157,21 +150,6 @@ final class ProspectorSerialBridge {
         // CallRequest.payload is the custom Request message itself. Its first
         // field is UpdateRequest, so body needs exactly one enclosing field.
         let payload = Proto.field(1, bytes: body)
-        let call = Proto.field(1, value: UInt64(subsystemIndex)) + Proto.field(2, bytes: payload)
-        _ = try self.call(custom: Proto.field(2, bytes: call))
-    }
-
-    private func requestHostStatus(subsystemIndex: UInt32, status: HostStatus) throws {
-        let payload = Proto.field(1, bytes:
-            Proto.field(1, bytes:
-                Proto.field(1, value: UInt64(status.unixTime))
-                + Proto.field(2, value: Proto.zigZag(status.temperatureDeciC))
-                + Proto.field(3, value: UInt64(status.weatherCode))
-                + Proto.field(4, value: UInt64(status.observedAt))
-                + Proto.field(5, value: Proto.zigZag(status.highTemperatureDeciC))
-                + Proto.field(6, value: Proto.zigZag(status.lowTemperatureDeciC))
-                + Proto.field(7, value: UInt64(status.rainProbability))
-                + Proto.field(8, value: Proto.zigZag(status.timezoneOffsetMinutes))))
         let call = Proto.field(1, value: UInt64(subsystemIndex)) + Proto.field(2, bytes: payload)
         _ = try self.call(custom: Proto.field(2, bytes: call))
     }

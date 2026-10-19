@@ -34,9 +34,9 @@ struct ProspectorMacOSApp: App {
 
 private enum SettingsSection: String, CaseIterable, Identifiable {
     case sync = "同步"
-    case environment = "时间与天气"
+    case system = "系统信息"
     var id: String { rawValue }
-    var icon: String { self == .sync ? "arrow.triangle.2.circlepath" : "cloud.sun" }
+    var icon: String { self == .sync ? "arrow.triangle.2.circlepath" : "cpu" }
 }
 
 struct ProspectorSettingsView: View {
@@ -51,7 +51,7 @@ struct ProspectorSettingsView: View {
         } detail: {
             switch section ?? .sync {
             case .sync: SyncSettingsView()
-            case .environment: EnvironmentSettingsView()
+            case .system: SystemSettingsView()
             }
         }
     }
@@ -121,36 +121,32 @@ struct SyncSettingsView: View {
     }
 }
 
-struct EnvironmentSettingsView: View {
-    @AppStorage("prospector.syncClock") private var syncClock = true
-    @AppStorage("prospector.syncWeather") private var syncWeather = true
-    @AppStorage("prospector.weatherPlace") private var place = "Shanghai"
-    @AppStorage("prospector.weatherLatitude") private var latitude = "31.2304"
-    @AppStorage("prospector.weatherLongitude") private var longitude = "121.4737"
+struct SystemSettingsView: View {
+    @ObservedObject private var model = SyncModel.shared
+
+    private func percent(_ value: Int?) -> String {
+        value.map { "\($0)%" } ?? "--"
+    }
 
     var body: some View {
         Form {
-            Section("主机时间") {
-                Toggle("同步 Mac 时间", isOn: $syncClock)
-                Text("开启后，后台同步会将当前本地时间发送给支持 host-status 的主题。")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Section("天气") {
-                Toggle("同步天气", isOn: $syncWeather)
-                TextField("地点名称", text: $place)
-                HStack {
-                    TextField("纬度", text: $latitude)
-                    TextField("经度", text: $longitude)
-                }
+            Section("Mac 系统信息") {
+                LabeledContent("CPU 使用率", value: percent(model.systemMetrics.cpuPercent))
+                LabeledContent("内存使用率", value: percent(model.systemMetrics.ramPercent))
+                LabeledContent("CPU 温度", value: model.systemMetrics.cpuTemperatureDeciC.map {
+                    String(format: "%.1f°C", Double($0) / 10)
+                } ?? "--°C")
             }
             Section {
-                Text("天气使用 Open-Meteo，无需 API 密钥。此页只配置通用 host-status 数据，不会更改当前主题。")
+                Text("随后台同步刷新，并发送到支持系统信息主题的键盘。CPU 首次采样或传感器不可用时显示 --。")
                     .font(.caption).foregroundStyle(.secondary)
+                Button(model.syncing ? "正在同步…" : "立即同步") { model.syncNow() }
+                    .disabled(model.syncing)
             }
         }
         .formStyle(.grouped)
         .padding(22)
-        .navigationTitle("时间与天气")
+        .navigationTitle("系统信息")
     }
 }
 
@@ -162,6 +158,7 @@ final class SyncModel: ObservableObject {
     @Published var cubeStatus = "等待同步"
     @Published var prospectorStatus = "等待同步"
     @Published var syncing = false
+    @Published var systemMetrics = SystemMetrics()
     private var timer: Timer?
     private var configuredInterval: Int?
 
@@ -199,6 +196,8 @@ final class SyncModel: ObservableObject {
         prospectorStatus = prospectorEnabled ? "正在同步…" : "已停用"
         queue.async {
             let metrics = CodexMetricsReader.read()
+            let system = SystemMetricsReader.read()
+            DispatchQueue.main.async { self.systemMetrics = system }
             if !cubeEnabled { CubeBridge.shared.disconnect() }
             MultiDeviceSync.run(cubeEnabled: cubeEnabled, prospectorEnabled: prospectorEnabled, cube: {
                 let excluded: Set<String> = prospectorEnabled && !prospectorPath.isEmpty ? [prospectorPath] : []
@@ -209,13 +208,13 @@ final class SyncModel: ObservableObject {
                     if !cubePath.isEmpty { excluded.insert(cubePath) }
                     if let identified = CubeBridge.shared.identifiedSerialPath { excluded.insert(identified) }
                 }
-                try ProspectorSerialBridge().connectAndSync(metrics, hostStatus: HostStatusReader.read(),
+                try ProspectorSerialBridge().connectAndSync(metrics, system: system,
                     selectedPath: prospectorPath, excludingPaths: excluded)
                 return "USB"
             }, report: { device, result in
                 let message: String
                 switch result {
-                case .success(let connection): message = "\(connection) · \(Date.now.formatted(date: .omitted, time: .shortened))"
+                case .success(let connection): message = "\(connection) · 已同步"
                 case .failure(let error): message = error.localizedDescription
                 }
                 DispatchQueue.main.async {
