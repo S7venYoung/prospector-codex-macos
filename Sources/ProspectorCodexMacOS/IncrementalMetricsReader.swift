@@ -19,6 +19,8 @@ final class IncrementalMetricsReader {
         var daily: [Date: UInt64] = [:]
         var sampledDays = Set<Date>()
         var quota: Quota?
+        var quotaScanEnd: UInt64 = 0
+        var quotaObservedSize: UInt64?
     }
     private let root: URL
     private var cursors: [String: Cursor] = [:]
@@ -27,15 +29,18 @@ final class IncrementalMetricsReader {
     private let calendar: Calendar
     private let byteBudget: Int
     private let timeBudget: TimeInterval
+    private let quotaByteBudget: Int
+    private(set) var quotaBytesReadLastCycle = 0
     private(set) var bytesReadLastCycle = 0
     private(set) var catchingUp = false
 
     init(root: URL, calendar: Calendar = .current, byteBudget: Int = 8 * 1024 * 1024,
-         timeBudget: TimeInterval = 0.4) {
+         timeBudget: TimeInterval = 0.4, quotaByteBudget: Int = 1024 * 1024) {
         self.root = root
         self.calendar = calendar
         self.byteBudget = max(1, byteBudget)
         self.timeBudget = max(0.001, timeBudget)
+        self.quotaByteBudget = max(1, quotaByteBudget)
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     }
 
@@ -60,11 +65,10 @@ final class IncrementalMetricsReader {
         cursors = cursors.filter { retained.contains($0.key) }
         bytesReadLastCycle = 0
         catchingUp = false
-        let deadline = ProcessInfo.processInfo.systemUptime + timeBudget
         for (file, size, inode, modified) in candidates {
             var cursor = cursors[file.path] ?? Cursor()
             // Replaced/truncated files and same-size rewrites must not retain old totals.
-            if cursor.inode != inode || size < cursor.offset ||
+            if cursor.inode != inode || size < cursor.observedSize ||
                 (size == cursor.observedSize && modified != cursor.modified) {
                 cursor = Cursor()
             }
@@ -74,6 +78,25 @@ final class IncrementalMetricsReader {
             cursor.daily = cursor.daily.filter { $0.key >= midnight }
             cursor.sampledDays = cursor.sampledDays.filter { $0 >= midnight }
             cursors[file.path] = cursor
+            if cursor.quotaObservedSize != size {
+                cursor.quotaScanEnd = size
+                cursor.quotaObservedSize = size
+            }
+        }
+        // Latest quotas must not wait behind historical token accounting.
+        quotaBytesReadLastCycle = 0
+        let quotaDeadline = ProcessInfo.processInfo.systemUptime + min(0.15, timeBudget / 2)
+        for (file, size, _, _) in candidates {
+            guard quotaBytesReadLastCycle < quotaByteBudget,
+                  ProcessInfo.processInfo.systemUptime < quotaDeadline,
+                  let cursor = cursors[file.path] else { continue }
+            // The forward pass has already read every line in unchanged files.
+            if cursor.offset >= size { cursor.quotaScanEnd = 0; continue }
+            scanQuotaTail(file, size: size, cursor: cursor, deadline: quotaDeadline)
+        }
+        let deadline = ProcessInfo.processInfo.systemUptime + timeBudget
+        for (file, size, _, _) in candidates {
+            guard let cursor = cursors[file.path] else { continue }
             guard cursor.offset < size else { continue }
             guard bytesReadLastCycle < byteBudget, ProcessInfo.processInfo.systemUptime < deadline,
                   let handle = try? FileHandle(forReadingFrom: file) else { catchingUp = true; continue }
@@ -86,16 +109,7 @@ final class IncrementalMetricsReader {
                     guard let data = try handle.read(upToCount: count), !data.isEmpty else { break }
                     bytesReadLastCycle += data.count
                     cursor.offset += UInt64(data.count)
-                    for byte in data {
-                        if byte == 10 {
-                            if !cursor.droppingOversizedLine { consume(cursor.pending, cursor: cursor, midnight: midnight) }
-                            cursor.pending.removeAll(keepingCapacity: true)
-                            cursor.droppingOversizedLine = false
-                        } else if !cursor.droppingOversizedLine {
-                            if cursor.pending.count < 1024 * 1024 { cursor.pending.append(byte) }
-                            else { cursor.pending.removeAll(keepingCapacity: true); cursor.droppingOversizedLine = true }
-                        }
-                    }
+                    consumeChunk(data, cursor: cursor, midnight: midnight)
                 }
             } catch { catchingUp = true }
             if cursor.offset < size { catchingUp = true }
@@ -123,6 +137,76 @@ final class IncrementalMetricsReader {
                             quotaAgeSeconds: UInt32(min(86_400, age)))
     }
 
+
+    // Delimiter search avoids Swift byte-at-a-time iteration over large messages.
+    private func consumeChunk(_ data: Data, cursor: Cursor, midnight: Date) {
+        var start = data.startIndex
+        while start < data.endIndex {
+            let newline = data.range(of: Data([10]), in: start..<data.endIndex)
+            let end = newline?.lowerBound ?? data.endIndex
+            if !cursor.droppingOversizedLine {
+                if cursor.pending.count + end - start <= 1024 * 1024 {
+                    cursor.pending.append(data[start..<end])
+                } else {
+                    cursor.pending.removeAll(keepingCapacity: true)
+                    cursor.droppingOversizedLine = true
+                }
+            }
+            guard let newline else { break }
+            if !cursor.droppingOversizedLine {
+                consume(cursor.pending, cursor: cursor, midnight: midnight)
+            }
+            cursor.pending.removeAll(keepingCapacity: true)
+            cursor.droppingOversizedLine = false
+            start = newline.upperBound
+        }
+    }
+
+    private func scanQuotaTail(_ file: URL, size: UInt64, cursor: Cursor, deadline: TimeInterval) {
+        guard cursor.quotaScanEnd > 0,
+              let handle = try? FileHandle(forReadingFrom: file) else { return }
+        defer { try? handle.close() }
+        // Bounded backward windows. Overlap joins ordinary quota records crossing
+        // a window boundary; partial first/last lines are never parsed as JSON.
+        let end = cursor.quotaScanEnd
+        let remaining = quotaByteBudget - quotaBytesReadLastCycle
+        let span = min(128 * 1024, remaining)
+        guard span > 0 else { return }
+        let start = end > UInt64(span) ? end - UInt64(span) : 0
+        let count = min(remaining, Int(min(size - start, UInt64(span + 4096))))
+        do {
+            try handle.seek(toOffset: start)
+            guard let data = try handle.read(upToCount: count), !data.isEmpty else { return }
+            quotaBytesReadLastCycle += data.count
+            var lineStart = data.startIndex
+            if start > 0 {
+                guard let newline = data.range(of: Data([10])) else {
+                    cursor.quotaScanEnd = start
+                    return
+                }
+                lineStart = newline.upperBound
+            }
+            while lineStart < data.endIndex,
+                  ProcessInfo.processInfo.systemUptime < deadline,
+                  let newline = data.range(of: Data([10]), in: lineStart..<data.endIndex) {
+                let line = data[lineStart..<newline.lowerBound]
+                if line.count <= 1024 * 1024,
+                   line.range(of: Data("\"rate_limits\"".utf8)) != nil,
+                   let json = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+                   let payload = json["payload"] as? [String: Any],
+                   let stamp = json["timestamp"] as? String,
+                   let timestamp = fractional.date(from: stamp) ?? plain.date(from: stamp) {
+                    updateQuota(payload, timestamp: timestamp, cursor: cursor)
+                }
+                lineStart = newline.upperBound
+            }
+            // Retry this window if processing was interrupted; do not skip quotas.
+            if ProcessInfo.processInfo.systemUptime < deadline {
+                cursor.quotaScanEnd = start
+            }
+        } catch { /* Forward accounting and other files can still progress. */ }
+    }
+
     private func consume(_ line: Data, cursor: Cursor, midnight: Date) {
         // Most session lines contain conversation content, not metrics: don't parse them.
         guard line.range(of: Data("\"token_count\"".utf8)) != nil || line.range(of: Data("\"rate_limits\"".utf8)) != nil,
@@ -144,6 +228,10 @@ final class IncrementalMetricsReader {
             }
             cursor.previousTotal = total
         }
+        updateQuota(payload, timestamp: timestamp, cursor: cursor)
+    }
+
+    private func updateQuota(_ payload: [String: Any], timestamp: Date, cursor: Cursor) {
         if cursor.quota == nil || timestamp > cursor.quota!.timestamp,
            let limits = payload["rate_limits"] as? [String: Any],
            let primary = limits["primary"] as? [String: Any],

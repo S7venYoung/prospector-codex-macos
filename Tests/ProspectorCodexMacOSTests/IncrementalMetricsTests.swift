@@ -2,6 +2,72 @@ import XCTest
 @testable import ProspectorCodexMacOS
 
 final class IncrementalMetricsTests: XCTestCase {
+    func testTailQuotaDoesNotWaitForTokenBackfill() throws {
+        let root = try directory(), file = root.appendingPathComponent("large.jsonl"), now = Date()
+        var data = Data(repeating: 32, count: 2 * 1024 * 1024)
+        data.append(10)
+        data.append(try event(now, total: 500, last: 500, used: 12))
+        try data.write(to: file)
+        let reader = IncrementalMetricsReader(root: root, byteBudget: 64, timeBudget: 1)
+        let metrics = reader.read(now: now)
+        XCTAssertEqual(metrics.usedPercent, 12)
+        XCTAssertEqual(metrics.weekUsedPercent, 36)
+        XCTAssertLessThanOrEqual(metrics.quotaAgeSeconds, 1)
+        XCTAssertNil(metrics.totalTokens)
+        XCTAssertTrue(reader.catchingUp)
+        XCTAssertLessThanOrEqual(reader.bytesReadLastCycle, 64)
+        XCTAssertLessThanOrEqual(reader.quotaBytesReadLastCycle, 1024 * 1024)
+    }
+
+    func testTailQuotaAppendWhileBackfillIsIncomplete() throws {
+        let root = try directory(), file = root.appendingPathComponent("large.jsonl"), now = Date()
+        var data = Data(repeating: 32, count: 1024 * 1024)
+        data.append(10)
+        data.append(try event(now, total: 100, last: 100, used: 20))
+        try data.write(to: file)
+        let reader = IncrementalMetricsReader(root: root, byteBudget: 64, timeBudget: 1)
+        XCTAssertEqual(reader.read(now: now).usedPercent, 20)
+        let next = try event(now.addingTimeInterval(1), total: 150, last: 50, used: 25)
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: next.prefix(next.count / 2))
+        XCTAssertEqual(reader.read(now: now.addingTimeInterval(2)).usedPercent, 20)
+        try handle.write(contentsOf: next.suffix(next.count - next.count / 2))
+        try handle.close()
+        let metrics = reader.read(now: now.addingTimeInterval(3))
+        XCTAssertEqual(metrics.usedPercent, 25)
+        XCTAssertNil(metrics.totalTokens)
+        XCTAssertTrue(reader.catchingUp)
+    }
+
+    func testTailQuotaExpiryAndTruncationInvalidateOldValues() throws {
+        let root = try directory(), file = root.appendingPathComponent("large.jsonl"), now = Date()
+        var data = Data(repeating: 32, count: 1024 * 1024)
+        data.append(10)
+        data.append(try event(now, total: 100, last: 100, used: 20))
+        try data.write(to: file)
+        let reader = IncrementalMetricsReader(root: root, byteBudget: 64, timeBudget: 1)
+        XCTAssertEqual(reader.read(now: now).usedPercent, 20)
+        XCTAssertNil(reader.read(now: now.addingTimeInterval(901)).usedPercent)
+        // Truncation above the forward offset must also invalidate tail caches.
+        try Data(repeating: 32, count: 4096).write(to: file)
+        XCTAssertNil(reader.read(now: now).usedPercent)
+    }
+
+    func testTailReadNeverDoubleCountsDailyTokens() throws {
+        let root = try directory(), file = root.appendingPathComponent("daily.jsonl"), now = Date()
+        let data = try event(now, total: 100, last: 100) + event(now.addingTimeInterval(1), total: 150, last: 50)
+        try data.write(to: file)
+        let reader = IncrementalMetricsReader(root: root, byteBudget: 64, timeBudget: 1)
+        XCTAssertEqual(reader.read(now: now.addingTimeInterval(2)).usedPercent, 20)
+        var metrics = reader.read(now: now.addingTimeInterval(2))
+        for _ in 0..<30 where reader.catchingUp { metrics = reader.read(now: now.addingTimeInterval(2)) }
+        XCTAssertEqual(metrics.totalTokens, 150)
+        XCTAssertEqual(reader.read(now: now.addingTimeInterval(2)).totalTokens, 150)
+        XCTAssertEqual(reader.bytesReadLastCycle, 0)
+        XCTAssertEqual(reader.quotaBytesReadLastCycle, 0)
+    }
+
     private func directory() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
