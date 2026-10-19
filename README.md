@@ -34,3 +34,13 @@ swift test
 ```
 
 GitHub Actions packages `Prospector.dmg`. The app is ad-hoc signed, not Apple notarized.
+
+## Velvet 左右键盘屏幕（待构建和实机验证）
+
+沿用现有 Prospector USB Studio 连接，识别接收器的 `velvet_display` 和 `cormoran_custom_settings` 子系统后，把 Codex 与 Mac 系统数据写入 `host_metrics`（MEMORY 模式，不刷写 Flash）。接收器将数据转发至左右键盘，不影响原扫描仪/Cube 协议。
+
+左手默认 Codex 5 小时/7 天剩余额度及重置倒计时；右手默认 CPU、RAM、CPU 温度和趋势。DYA Custom Settings 的 `velvet_display/left_theme`、`right_theme`：0=原小猫咪，1=Codex，2=系统信息，可各自保存。
+
+CPU 使用 Mach 计数差值，首次采样未知；RAM 为 active+wired+compressed，非 macOS 内存压力指标。CPU 温度通过 AppleSMC 的 CPU 专用 TC0D/TC0P 传感器读取；不同 Mac 的接口/键名可用性不同，尤其 Apple Silicon，读不到显示 `--°C`。不会用天气、GPU 或电池温度替代 CPU 温度。已知 CPU SMC 键可通过 `prospector.cpuTemperatureSMCKey` 自定义；未确认该键含义时不要指定。此温度读取尚未在用户硬件上验证。
+
+沿用应用现有 15–60 秒同步周期，接收器 90 秒没有新数据后显示未知；趋势记录最近 12 次电脑更新，不重复填充未更新的旧值。与 DYA 不能同时独占同一串口，改主题并保存后退出 DYA，再开启本应用同步。需要配套更新 `zmk-elashvelvet` 的 nano 分支三份固件。Actions 已改为仅手动触发，此次没有构建或发布安装包。

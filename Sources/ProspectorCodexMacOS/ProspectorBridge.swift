@@ -71,7 +71,7 @@ final class ProspectorSerialBridge {
                     return
                 }
                 let list = try requestList()
-                guard list[subsystemIdentifier] != nil || list[hostStatusSubsystemIdentifier] != nil else {
+                guard list[subsystemIdentifier] != nil || list[hostStatusSubsystemIdentifier] != nil || list["velvet_display"] != nil else {
                     throw BridgeError.subsystemMissing
                 }
                 identified = true
@@ -99,6 +99,10 @@ final class ProspectorSerialBridge {
 
     private func syncStudio(_ metrics: CodexMetrics, hostStatus: HostStatus?, list: [String: UInt32]) throws {
         var sent = false
+        if let namespace = list["velvet_display"], let settings = list["cormoran_custom_settings"] {
+            try requestKeyboardDashboard(settingsIndex: settings, namespaceIndex: namespace, metrics: metrics)
+            sent = true
+        }
         // A receiver-only weather theme intentionally omits the Codex metrics
         // endpoint. Do not let that prevent its independent clock/weather RPC.
         if let index = list[subsystemIdentifier] {
@@ -110,6 +114,28 @@ final class ProspectorSerialBridge {
             sent = true
         }
         guard sent else { throw BridgeError.subsystemMissing }
+    }
+
+    private func requestKeyboardDashboard(settingsIndex: UInt32, namespaceIndex: UInt32, metrics: CodexMetrics) throws {
+        let sequence = UInt8(truncatingIfNeeded: UInt64(Date().timeIntervalSince1970))
+        let data = KeyboardDashboard.payload(metrics, system: SystemMetricsReader.read(), sequence: sequence)
+        let reference = Proto.field(1, value: UInt64(namespaceIndex))
+            + Proto.field(2, bytes: Array("host_metrics".utf8))
+        let value = Proto.field(1, bytes: data)
+        // Custom Settings WriteSetting (field 3), MEMORY mode = 0: never write
+        // live telemetry to flash. Theme preferences remain managed by DYA.
+        let request = Proto.field(3, bytes: Proto.field(1, bytes: reference) + Proto.field(2, bytes: value))
+        let call = Proto.field(1, value: UInt64(settingsIndex)) + Proto.field(2, bytes: request)
+        let response = try self.call(custom: Proto.field(2, bytes: call))
+        let body = try Proto.child(field: 1, in: response)
+        let custom = try Proto.child(field: 100, in: body)
+        let result = try Proto.child(field: 2, in: custom)
+        let payload = try Proto.child(field: 2, in: result)
+        if let error = try? Proto.child(field: 1, in: payload) {
+            let message = (try? Proto.child(field: 1, in: error)).flatMap { String(bytes: $0, encoding: .utf8) } ?? "Keyboard dashboard update rejected"
+            throw BridgeError.serial(message)
+        }
+        _ = try Proto.child(field: 2, in: payload)
     }
 
     private func requestList() throws -> [String: UInt32] {
