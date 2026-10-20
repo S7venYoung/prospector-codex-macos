@@ -195,7 +195,7 @@ final class SyncModel: ObservableObject {
         cubeStatus = cubeEnabled ? "正在同步…" : "已停用"
         prospectorStatus = prospectorEnabled ? "正在同步…" : "已停用"
         queue.async {
-            let metrics = CodexMetricsReader.read()
+            let metrics = OfficialQuotaReader.shared.read()
             let system = SystemMetricsReader.read()
             DispatchQueue.main.async { self.systemMetrics = system }
             if !cubeEnabled { CubeBridge.shared.disconnect() }
