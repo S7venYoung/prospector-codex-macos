@@ -1,0 +1,3 @@
+2026-10-21 User requested macOS companion build.
+Include 81f2c6c7657e1fbf5f2399234068974fe4f0b474: official reset timestamp and CODEX3 compatibility.
+Build/test/package once. No automatic installation or device flashing.

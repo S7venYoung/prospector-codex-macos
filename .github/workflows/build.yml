@@ -2,6 +2,9 @@ name: Build Prospector Codex macOS
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [.github/build-request]
 
 jobs:
   build:
