@@ -12,8 +12,12 @@ final class ResetTimeTests: XCTestCase {
 
     func testOfficialResetSurvivesMergeWithoutChangingDailyTokens() throws {
         let now = Date(timeIntervalSince1970: 2_000_000_000)
-        let result: [String: Any] = ["rateLimits": ["primary": ["usedPercent": 15,
+        let payload: [String: Any] = ["rateLimits": ["primary": ["usedPercent": 15,
             "windowDurationMins": 300, "resetsAt": 2_000_003_600]]]
+        // Match the app-server transport: JSON numbers are decoded NSNumbers,
+        // not unbridged Swift Int values in a hand-built dictionary.
+        let result = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: JSONSerialization.data(withJSONObject: payload)) as? [String: Any])
         let snapshot = try XCTUnwrap(OfficialQuotaReader.Snapshot.parse(result, now: now))
         let logs = CodexMetrics(usedPercent: nil, weekUsedPercent: nil, totalTokens: 123,
                                resetInMinutes: nil, updatedAt: 0)
