@@ -2,10 +2,15 @@ import Foundation
 import Darwin
 
 enum CubeProtocol {
-    static func frame(_ metrics: CodexMetrics) -> String {
+    static func frame(_ metrics: CodexMetrics, version: Int = 2, timeZone: TimeZone = .current) -> String {
         let left = metrics.usedPercent.map { max(0, min(100, 100 - $0)) } ?? -1
         let week = metrics.weekUsedPercent.map { max(0, min(100, 100 - $0)) } ?? -1
         let tokens = metrics.totalTokens.map(String.init) ?? "-1"
+        if version >= 3 {
+            let reset = metrics.usedPercent != nil ? metrics.primaryResetAt : nil
+            let offset = reset.map { timeZone.secondsFromGMT(for: Date(timeIntervalSince1970: Double($0))) } ?? 0
+            return "CODEX3 \(left) \(week) \(tokens) \(metrics.quotaAgeSeconds) 120 \(reset.map(String.init) ?? "-1") \(offset)\n"
+        }
         return "CODEX2 \(left) \(week) \(tokens) \(metrics.quotaAgeSeconds) 120\n"
     }
 }
@@ -27,7 +32,7 @@ final class CubeBridge {
         if settings.object(forKey: "cube.usbEnabled") == nil || settings.bool(forKey: "cube.usbEnabled") {
             do {
                 let port = try usbPort(excludingPaths: excludingPaths)
-                try port.write(frame)
+                try port.write(CubeProtocol.frame(metrics, version: port.protocolVersion))
                 _ = try port.waitLine(timeout: 3) { $0 == "OK" }
                 successes.append("USB")
                 // Pairing is only available over the locally connected cable.
@@ -46,8 +51,8 @@ final class CubeBridge {
         } else { disconnect() }
         if settings.bool(forKey: "cube.wifiEnabled") {
             do {
-                try sendWiFi(frame, host: settings.string(forKey: "cube.wifiHost") ?? "",
-                             token: settings.string(forKey: "cube.wifiToken") ?? "")
+                try sendWiFi(CubeProtocol.frame(metrics, version: 3), host: settings.string(forKey: "cube.wifiHost") ?? "",
+                             token: settings.string(forKey: "cube.wifiToken") ?? "", fallback: frame)
                 successes.append("Wi-Fi")
             } catch { failures.append("Wi-Fi: \(error.localizedDescription)") }
         }
@@ -72,6 +77,11 @@ final class CubeBridge {
                 // Only probe; no data is written to a device before it identifies.
                 try port.write("CAPS\n")
                 _ = try port.waitLine(timeout: 2) { $0 == "CUBE-CODEX/2" }
+                // Keep CAPS/2 unchanged so existing companion versions still work.
+                try port.write("CAPS3\n")
+                if (try? port.waitLine(timeout: 1, matching: { $0 == "CUBE-CODEX/3" })) != nil {
+                    port.protocolVersion = 3
+                }
                 lastIdentifiedPath = path
                 serial = port; connectedPath = path
                 return port
@@ -80,7 +90,7 @@ final class CubeBridge {
         throw BridgeError.serial("未发现新版 Cube；请检查固件和 115200 波特率串口")
     }
 
-    private func sendWiFi(_ frame: String, host: String, token: String) throws {
+    private func sendWiFi(_ frame: String, host: String, token: String, fallback: String? = nil) throws {
         let host = host.trimmingCharacters(in: .whitespacesAndNewlines)
         let pieces = host.split(separator: ".", omittingEmptySubsequences: false)
         guard pieces.count == 4, pieces.allSatisfy({ Int($0).map { (0...255).contains($0) } ?? false }),
@@ -98,12 +108,17 @@ final class CubeBridge {
         let result = HTTPResult()
         let task = URLSession.shared.dataTask(with: request) { data, response, error in
             let reply = data.flatMap { String(data: $0, encoding: .utf8) }?.trimmingCharacters(in: .whitespacesAndNewlines)
-            result.set(success: (response as? HTTPURLResponse)?.statusCode == 200 && reply == "OK", error: error)
+            result.set(success: (response as? HTTPURLResponse)?.statusCode == 200 && reply == "OK", error: error,
+                       status: (response as? HTTPURLResponse)?.statusCode)
             semaphore.signal()
         }
         task.resume()
         if semaphore.wait(timeout: .now() + 5) == .timedOut { task.cancel(); throw BridgeError.serial("Wi-Fi 同步超时") }
-        let (success, error) = result.get()
+        let (success, error, status) = result.get()
+        if status == 400, let fallback {
+            // Only a syntax rejection permits fallback; never mask auth/network failures.
+            return try sendWiFi(fallback, host: host, token: token)
+        }
         guard success else { throw BridgeError.serial(error?.localizedDescription ?? "Cube 拒绝同步，请核对配对码") }
     }
 }
@@ -112,11 +127,13 @@ private final class HTTPResult {
     private let lock = NSLock()
     private var success = false
     private var error: Error?
-    func set(success: Bool, error: Error?) { lock.lock(); defer { lock.unlock() }; self.success = success; self.error = error }
-    func get() -> (Bool, Error?) { lock.lock(); defer { lock.unlock() }; return (success, error) }
+    private var status: Int?
+    func set(success: Bool, error: Error?, status: Int?) { lock.lock(); defer { lock.unlock() }; self.success = success; self.error = error; self.status = status }
+    func get() -> (Bool, Error?, Int?) { lock.lock(); defer { lock.unlock() }; return (success, error, status) }
 }
 
 private final class CubeSerialPort {
+    var protocolVersion = 2
     private let fd: Int32
     private var input: [UInt8] = []
     private var lines: [String] = []

@@ -27,7 +27,7 @@ final class OfficialQuotaReader {
                       let used = value["usedPercent"] as? Double, used.isFinite,
                       (0...100).contains(used),
                       let reset = value["resetsAt"] as? Double,
-                      reset > now.timeIntervalSince1970 else { return nil }
+                      reset > now.timeIntervalSince1970, reset <= Double(UInt32.max) else { return nil }
                 return Window(used: Int(used.rounded()), resetsAt: reset)
             }
             let primary = window("primary", minutes: 300)
@@ -46,7 +46,8 @@ final class OfficialQuotaReader {
             return CodexMetrics(usedPercent: p?.used, weekUsedPercent: s?.used,
                 totalTokens: logs.totalTokens,
                 resetInMinutes: p.map { UInt32(max(0, ($0.resetsAt - now.timeIntervalSince1970) / 60)) },
-                updatedAt: logs.updatedAt, quotaAgeSeconds: UInt32(age))
+                updatedAt: logs.updatedAt, quotaAgeSeconds: UInt32(age),
+                primaryResetAt: p.map { UInt32($0.resetsAt) })
         }
     }
 

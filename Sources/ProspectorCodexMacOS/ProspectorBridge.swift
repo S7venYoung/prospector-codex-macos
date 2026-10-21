@@ -12,6 +12,7 @@ struct CodexMetrics {
     let resetInMinutes: UInt32?
     let updatedAt: UInt32
     var quotaAgeSeconds: UInt32 = 86_400
+    var primaryResetAt: UInt32? = nil
 }
 
 enum BridgeError: LocalizedError {
