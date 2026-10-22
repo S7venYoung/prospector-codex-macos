@@ -201,7 +201,7 @@ final class SyncModel: ObservableObject {
             if !cubeEnabled { CubeBridge.shared.disconnect() }
             MultiDeviceSync.run(cubeEnabled: cubeEnabled, prospectorEnabled: prospectorEnabled, cube: {
                 let excluded: Set<String> = prospectorEnabled && !prospectorPath.isEmpty ? [prospectorPath] : []
-                return try CubeBridge.shared.sync(metrics, excludingPaths: excluded)
+                return try CubeBridge.shared.sync(metrics, system: system, excludingPaths: excluded)
             }, prospector: {
                 var excluded = Set<String>()
                 if cubeEnabled {

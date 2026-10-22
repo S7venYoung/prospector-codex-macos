@@ -65,3 +65,9 @@ CPU 使用 Mach 计数差值，首次采样未知；RAM 为 active+wired+compres
 ## 配套软件系统信息页面
 
 已删除时间、天气设置及其网络请求和 host-status 同步。系统信息页显示 Mac CPU 使用率、内存使用率和 CPU 温度，不显示内存容量数值。页面与键盘遥测使用同一次采样，随后台同步刷新；首次 CPU 采样和不可用传感器显示未知值。同步状态显示“已同步”，不显示时间。
+
+### Cube 键盘系统信息转发
+
+Cube 同步复用现有 CPU/RAM/温度采集结果，使用与 Nano 相同的 18 字节 host_metrics。USB 经 CAPSHOST 探测能力后发送 HOST1 十六进制帧；Wi-Fi 经已有配对令牌的 /v1/codex 接口发送同一帧。保持原 CODEX2/3 额度同步。旧 Cube 的 USB 不发送新增帧，Wi-Fi 仅对 HTTP 400 回退额度帧，不掩盖认证或网络错误。
+
+需同时更新 codex/xingzhi-cube-dongle 的 Cube 主控，以及 zmk-esp32-cube 分支的键盘固件（左猫咪、右系统信息）。电脑采集频率维持现有设置，Cube 每秒刷新键盘，90 秒无新电脑数据后显示未知。未新增时间、天气或采集器。

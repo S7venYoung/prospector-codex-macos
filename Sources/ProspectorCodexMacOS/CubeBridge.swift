@@ -13,20 +13,29 @@ enum CubeProtocol {
         }
         return "CODEX2 \(left) \(week) \(tokens) \(metrics.quotaAgeSeconds) 120\n"
     }
+    static func hostFrame(_ metrics: CodexMetrics, system: SystemMetrics, sequence: UInt8) -> String {
+        let bytes = KeyboardDashboard.payload(metrics, system: system, sequence: sequence)
+        return "HOST1 " + bytes.map { String(format: "%02x", $0) }.joined() + "\n"
+    }
+
 }
 
 // Used exclusively from SyncModel's serial utility queue.
 final class CubeBridge {
     static let shared = CubeBridge()
     private var serial: CubeSerialPort?
+    private var hostSequence: UInt8 = 0
     private var connectedPath: String?
     private var lastIdentifiedPath: String?
     var identifiedSerialPath: String? { connectedPath ?? lastIdentifiedPath }
     func disconnect() { serial = nil; connectedPath = nil }
 
-    func sync(_ metrics: CodexMetrics, excludingPaths: Set<String> = []) throws -> String {
+    func sync(_ metrics: CodexMetrics, system: SystemMetrics? = nil, excludingPaths: Set<String> = []) throws -> String {
         let settings = UserDefaults.standard
         let frame = CubeProtocol.frame(metrics)
+        hostSequence &+= 1
+        let hostFrame = CubeProtocol.hostFrame(metrics, system: system ?? SystemMetricsReader.read(),
+                                               sequence: hostSequence)
         var successes: [String] = []
         var failures: [String] = []
         if settings.object(forKey: "cube.usbEnabled") == nil || settings.bool(forKey: "cube.usbEnabled") {
@@ -34,6 +43,11 @@ final class CubeBridge {
                 let port = try usbPort(excludingPaths: excludingPaths)
                 try port.write(CubeProtocol.frame(metrics, version: port.protocolVersion))
                 _ = try port.waitLine(timeout: 3) { $0 == "OK" }
+                if port.supportsHostMetrics {
+                    try port.write(hostFrame)
+                    let reply = try port.waitLine(timeout: 3) { $0 == "OK" || $0 == "ERR" }
+                    guard reply == "OK" else { throw BridgeError.serial("Cube 拒绝系统信息") }
+                }
                 successes.append("USB")
                 // Pairing is only available over the locally connected cable.
                 try port.write("PAIR\n")
@@ -52,6 +66,9 @@ final class CubeBridge {
         if settings.bool(forKey: "cube.wifiEnabled") {
             do {
                 try sendWiFi(CubeProtocol.frame(metrics, version: 3), host: settings.string(forKey: "cube.wifiHost") ?? "",
+                             token: settings.string(forKey: "cube.wifiToken") ?? "", fallback: frame)
+                // Old firmware rejects HOST1 with HTTP 400; keep its quota sync working.
+                try sendWiFi(hostFrame, host: settings.string(forKey: "cube.wifiHost") ?? "",
                              token: settings.string(forKey: "cube.wifiToken") ?? "", fallback: frame)
                 successes.append("Wi-Fi")
             } catch { failures.append("Wi-Fi: \(error.localizedDescription)") }
@@ -81,6 +98,12 @@ final class CubeBridge {
                 try port.write("CAPS3\n")
                 if (try? port.waitLine(timeout: 1, matching: { $0 == "CUBE-CODEX/3" })) != nil {
                     port.protocolVersion = 3
+                }
+                try port.write("CAPSHOST\n")
+                if let reply = try? port.waitLine(timeout: 1, matching: {
+                    $0 == "CUBE-HOST-METRICS/1" || $0 == "CUBE-HOST-METRICS/0"
+                }) {
+                    port.supportsHostMetrics = reply == "CUBE-HOST-METRICS/1"
                 }
                 lastIdentifiedPath = path
                 serial = port; connectedPath = path
@@ -134,6 +157,7 @@ private final class HTTPResult {
 
 private final class CubeSerialPort {
     var protocolVersion = 2
+    var supportsHostMetrics = false
     private let fd: Int32
     private var input: [UInt8] = []
     private var lines: [String] = []

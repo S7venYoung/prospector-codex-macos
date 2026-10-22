@@ -2,6 +2,18 @@ import XCTest
 @testable import ProspectorCodexMacOS
 
 final class KeyboardDashboardTests: XCTestCase {
+    func testCubeHostFrameUsesTheSameKeyboardPayload() {
+        let metrics = CodexMetrics(usedPercent: 18, weekUsedPercent: 36, totalTokens: nil,
+            resetInMinutes: 155, updatedAt: 1, quotaAgeSeconds: 0)
+        let system = SystemMetrics(cpuPercent: 24, ramPercent: 70,
+            usedBytes: 179 * 64 * 1024 * 1024, totalBytes: 16 * 1024 * 1024 * 1024,
+            cpuTemperatureDeciC: 635)
+        XCTAssertEqual(CubeProtocol.hostFrame(metrics, system: system, sequence: 1),
+                       "HOST1 013f0118465240007b02b300000154240000\n")
+        let missing = CubeProtocol.hostFrame(metrics, system: SystemMetrics(), sequence: 0)
+        XCTAssertTrue(missing.hasPrefix("HOST1 013800"))
+        XCTAssertEqual(missing.count, 43)
+    }
     func testRemainingQuotaAndCPUTemperatureAreIndependent() {
         let metrics = CodexMetrics(usedPercent: 18, weekUsedPercent: 36, totalTokens: nil,
             resetInMinutes: 155, updatedAt: 1, quotaAgeSeconds: 0)
