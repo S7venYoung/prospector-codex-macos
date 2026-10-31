@@ -11,7 +11,7 @@ struct SystemMetrics {
 }
 
 enum KeyboardDashboard {
-    static func payload(_ metrics: CodexMetrics, system: SystemMetrics, sequence: UInt8) -> [UInt8] {
+    static func payload(_ metrics: CodexMetrics, system: SystemMetrics, sequence: UInt8, timeZone: TimeZone = .current) -> [UInt8] {
         var p = [UInt8](repeating: 0, count: 18)
         p[0] = 1; p[2] = sequence
         if let cpu = system.cpuPercent, (0...100).contains(cpu) { p[1] |= 1; p[3] = UInt8(cpu) }
@@ -29,10 +29,18 @@ enum KeyboardDashboard {
         if metrics.quotaAgeSeconds <= 900 {
             if let used = metrics.usedPercent, (0...100).contains(used) { p[1] |= 8; p[5] = UInt8(100 - used) }
             if let used = metrics.weekUsedPercent, (0...100).contains(used) { p[1] |= 16; p[6] = UInt8(100 - used) }
-            if metrics.usedPercent != nil, let minutes = metrics.resetInMinutes {
-                p[1] |= 32
-                let seconds = UInt32(min(UInt64(UInt32.max), UInt64(minutes) * 60))
-                for i in 0..<4 { p[14+i] = UInt8(truncatingIfNeeded: seconds >> (i*8)) }
+            if metrics.usedPercent != nil, let resetAt = metrics.primaryResetAt {
+                var calendar = Calendar(identifier: .gregorian)
+                calendar.timeZone = timeZone
+                let parts = calendar.dateComponents([.hour, .minute], from: Date(timeIntervalSince1970: Double(resetAt)))
+                if let hour = parts.hour, let minute = parts.minute {
+                    p[1] |= 32
+                    // Keep the 18-byte transport unchanged; tag clock time so new
+                    // firmware never ages it as a countdown. No resetInMinutes fallback:
+                    // that field has historically carried two different meanings.
+                    let clock = UInt32(0x80000000) | UInt32(hour * 60 + minute)
+                    for i in 0..<4 { p[14+i] = UInt8(truncatingIfNeeded: clock >> (i*8)) }
+                }
             }
         }
         return p
