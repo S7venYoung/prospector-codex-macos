@@ -11,7 +11,7 @@ struct SystemMetrics {
 }
 
 enum KeyboardDashboard {
-    static func payload(_ metrics: CodexMetrics, system: SystemMetrics, sequence: UInt8, timeZone: TimeZone = .current) -> [UInt8] {
+    static func payload(_ metrics: CodexMetrics, system: SystemMetrics, sequence: UInt8, timeZone: TimeZone = .current, now: Date = Date()) -> [UInt8] {
         var p = [UInt8](repeating: 0, count: 18)
         p[0] = 1; p[2] = sequence
         if let cpu = system.cpuPercent, (0...100).contains(cpu) { p[1] |= 1; p[3] = UInt8(cpu) }
@@ -38,7 +38,8 @@ enum KeyboardDashboard {
                     // Keep the 18-byte transport unchanged; tag clock time so new
                     // firmware never ages it as a countdown. No resetInMinutes fallback:
                     // that field has historically carried two different meanings.
-                    let clock = UInt32(0x80000000) | UInt32(hour * 60 + minute)
+                    let remaining = UInt32(min(18000, max(0, Double(resetAt) - now.timeIntervalSince1970)))
+                    let clock = UInt32(0x80000000) | (remaining << 11) | UInt32(hour * 60 + minute)
                     for i in 0..<4 { p[14+i] = UInt8(truncatingIfNeeded: clock >> (i*8)) }
                 }
             }

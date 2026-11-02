@@ -46,9 +46,9 @@ final class KeyboardDashboardTests: XCTestCase {
             resetInMinutes: 155, updatedAt: 1, quotaAgeSeconds: 0, primaryResetAt: reset)
         for (offset, minutes) in [(28800, UInt32(1160)), (-25200, UInt32(260))] {
             let p = KeyboardDashboard.payload(metrics, system: SystemMetrics(), sequence: 1,
-                timeZone: TimeZone(secondsFromGMT: offset)!)
+                timeZone: TimeZone(secondsFromGMT: offset)!, now: Date(timeIntervalSince1970: Double(reset) - 7200))
             let value = (0..<4).reduce(UInt32(0)) { $0 | UInt32(p[14+$1]) << ($1*8) }
-            XCTAssertEqual(value, 0x80000000 | minutes)
+            XCTAssertEqual(value, 0x80000000 | (7200 << 11) | minutes)
             XCTAssertNotEqual(p[1] & 32, 0)
         }
     }
